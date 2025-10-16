@@ -9,6 +9,19 @@ from dotenv import load_dotenv
 import os
 from openai import OpenAI
 
+from features.gamification import (
+    calculate_level,
+    xp_progress_to_next_level,
+    calculate_streak,
+    check_and_award_milestones,
+    get_all_milestones_with_status,
+    get_sessions_today,
+    get_sessions_this_week,
+    calculate_improvement_rate,
+    calculate_goal_progress,
+    MILESTONES
+)
+
 app = FastAPI()
 
 app.add_middleware(
@@ -31,12 +44,31 @@ with open('personas.json', 'r') as f:
 
 # In-memory storage (replace with database in production)
 sessions_store = {}
+
 user_progress = {
     "total_sessions": 0,
     "category_stats": {},
     "persona_stats": {},
     "average_score": 0.0,
-    "scores_history": []
+    "scores_history": [],
+    "score_timestamps": [],  # NEW
+    
+    # Gamification fields
+    "total_practice_time_minutes": 0,
+    "current_streak_days": 0,
+    "longest_streak_days": 0,
+    "last_practice_date": None,
+    "practice_dates": [],
+    
+    # Achievements
+    "milestones_achieved": [],
+    "level": 1,
+    "experience_points": 0,
+    "badges": [],
+    
+    # Goals
+    "daily_goal": 3,
+    "weekly_goal": 15,
 }
 
 class SessionRequest(BaseModel):
@@ -312,7 +344,80 @@ def get_progress():
 def get_sessions():
     return list(sessions_store.values())
 
-def update_progress(category: str, persona_id: str, score: float):
+@app.get("/progress/detailed")
+def get_detailed_progress():
+    """Get comprehensive progress data for Track dashboard"""
+    sessions_list = list(sessions_store.values())
+    xp_info = xp_progress_to_next_level(user_progress["experience_points"])
+    
+    improvement = calculate_improvement_rate(user_progress["scores_history"])
+    
+    daily_progress = calculate_goal_progress(
+        get_sessions_today(sessions_list),
+        user_progress["daily_goal"]
+    )
+    
+    weekly_progress = calculate_goal_progress(
+        get_sessions_this_week(sessions_list),
+        user_progress["weekly_goal"]
+    )
+    
+    return {
+        **user_progress,
+        **xp_info,
+        "sessions_today": daily_progress["current"],
+        "sessions_this_week": weekly_progress["current"],
+        "improvement_rate": improvement,
+        "daily_goal_progress": daily_progress,
+        "weekly_goal_progress": weekly_progress
+    }
+
+
+@app.get("/progress/milestones")
+def get_milestones():
+    """Get all milestones with achievement status"""
+    milestones_list = get_all_milestones_with_status(user_progress["milestones_achieved"])
+    
+    return {
+        "milestones": milestones_list,
+        "total_achieved": len(user_progress["milestones_achieved"]),
+        "total_available": len(MILESTONES)
+    }
+
+
+@app.get("/progress/timeline")
+def get_progress_timeline():
+    """Get score history for charts"""
+    timeline = []
+    
+    for i, (score, timestamp) in enumerate(zip(user_progress["scores_history"], user_progress["score_timestamps"])):
+        timeline.append({
+            "session_number": i + 1,
+            "score": score,
+            "timestamp": timestamp,
+            "date": datetime.fromisoformat(timestamp).strftime("%Y-%m-%d")
+        })
+    
+    return timeline
+
+
+@app.get("/progress/heatmap")
+def get_practice_heatmap():
+    """Get practice frequency data for heatmap"""
+    date_counts = {}
+    
+    for date_str in user_progress["practice_dates"]:
+        date_counts[date_str] = date_counts.get(date_str, 0) + 1
+    
+    heatmap_data = [
+        {"date": date, "count": count}
+        for date, count in date_counts.items()
+    ]
+    
+    return heatmap_data
+
+def update_progress(category: str, persona_id: str, score: float, response_time_seconds: int = 90):
+    """Enhanced progress update with gamification"""
     user_progress["total_sessions"] += 1
     
     # Update category stats
@@ -335,7 +440,27 @@ def update_progress(category: str, persona_id: str, score: float):
     
     # Update overall average
     user_progress["scores_history"].append(score)
+    user_progress["score_timestamps"].append(datetime.now().isoformat())
     user_progress["average_score"] = sum(user_progress["scores_history"]) / len(user_progress["scores_history"])
+    
+    # NEW: Track practice dates
+    today = datetime.now().date().isoformat()
+    if today not in user_progress["practice_dates"]:
+        user_progress["practice_dates"].append(today)
+    
+    # NEW: Update practice time
+    user_progress["total_practice_time_minutes"] += response_time_seconds / 60
+    
+    # NEW: Calculate streaks
+    current_streak, longest_streak = calculate_streak(user_progress["practice_dates"])
+    user_progress["current_streak_days"] = current_streak
+    user_progress["longest_streak_days"] = max(longest_streak, user_progress["longest_streak_days"])
+    user_progress["last_practice_date"] = datetime.now().isoformat()
+    
+    # NEW: Check and award milestones
+    newly_achieved = check_and_award_milestones(user_progress)
+    
+    return newly_achieved
 
 def generate_model_answer(question):
     # Template for model answers based on category

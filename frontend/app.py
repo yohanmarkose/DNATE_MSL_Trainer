@@ -3,6 +3,20 @@ import requests
 import random
 from datetime import datetime
 
+from components.track_dashboard import (
+    inject_custom_css,
+    render_level_card,
+    render_streak_card,
+    render_key_metrics,
+    render_goal_progress,
+    render_score_trend_chart,
+    render_category_radar_chart,
+    render_practice_heatmap,
+    render_achievements_grid,
+    render_category_breakdown,
+    render_persona_breakdown
+)
+
 API_BASE_URL = "http://localhost:8000"
 
 # Initialize session state
@@ -20,7 +34,7 @@ st.set_page_config(page_title="MSL Practice Gym", layout="wide")
 st.title("🏋️ DNATE MSL Practice Gym")
 
 # Create tabs
-tab1, tab2, tab3, tab4 = st.tabs(["🎯 Practice", "📊 Track", "📚 Learn", "💬 Sessions"])
+tab1, track, tab3, tab4 = st.tabs(["🎯 Practice", "📊 Track", "📚 Learn", "💬 Sessions"])
 
 # TAB 1: PRACTICE
 with tab1:
@@ -225,56 +239,81 @@ with tab1:
                     for m in result['missing_points'][:5]:
                         st.write(f"- {m}")
 
-# TAB 2: TRACK
-with tab2:
-    st.header("📊 Your Progress")
+# TAB 2: TRACK (Progress Dashboard)
+with track:
+    inject_custom_css()
     
-    progress = requests.get(f"{API_BASE_URL}/progress").json()
+    st.header("📊 Progress Dashboard")
     
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.metric("Total Sessions", progress['total_sessions'])
-    
-    with col2:
-        st.metric("Average Score", f"{progress['average_score']:.1f}")
-    
-    with col3:
-        if progress['scores_history']:
-            trend = "📈" if len(progress['scores_history']) > 1 and progress['scores_history'][-1] > progress['scores_history'][0] else "📊"
-            st.metric("Trend", trend)
-    
-    st.divider()
-    
-    # Category Performance
-    if progress['category_stats']:
-        st.subheader("Performance by Category")
-        
-        for category, stats in progress['category_stats'].items():
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                st.write(f"**{category}**")
-                st.progress(stats['avg_score'] / 100)
-            with col2:
-                st.write(f"{stats['avg_score']:.1f} ({stats['count']} sessions)")
-    
-    st.divider()
-    
-    # Persona Performance
-    if progress['persona_stats']:
-        st.subheader("Performance by Persona")
-        
+    # Fetch all required data
+    try:
+        progress = requests.get(f"{API_BASE_URL}/progress/detailed").json()
+        milestones_data = requests.get(f"{API_BASE_URL}/progress/milestones").json()
+        timeline = requests.get(f"{API_BASE_URL}/progress/timeline").json()
+        heatmap_data = requests.get(f"{API_BASE_URL}/progress/heatmap").json()
         personas = requests.get(f"{API_BASE_URL}/personas").json()
+    except Exception as e:
+        st.error(f"Unable to load progress data. Make sure backend is running.")
+        st.stop()
+    
+    # SECTION 1: Gamification Hero
+    # st.markdown("---")
+    level, streak = st.columns([2, 1])
+    
+    with level:
+        render_level_card(progress)
+    
+    with streak:
+        render_streak_card(
+            progress.get('current_streak_days', 0),
+            progress.get('longest_streak_days', 0)
+        )
+    
+    # SECTION 2: Key Metrics
+    st.markdown("---")
+    st.subheader("📈 Key Metrics")
+    render_key_metrics(progress)
+    
+    # SECTION 3: Goals Progress
+    st.markdown("---")
+    render_goal_progress(progress)
+    
+    # SECTION 4: Interactive Charts
+    if progress.get('total_sessions', 0) > 0:
+        st.markdown("---")
+        st.subheader("📊 Performance Analytics")
         
-        for persona_id, stats in progress['persona_stats'].items():
-            persona_name = next((p['name'] for p in personas if p['id'] == persona_id), persona_id)
-            
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                st.write(f"**{persona_name}**")
-                st.progress(stats['avg_score'] / 100)
-            with col2:
-                st.write(f"{stats['avg_score']:.1f} ({stats['count']} sessions)")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            render_score_trend_chart(timeline)
+        
+        with col2:
+            render_category_radar_chart(progress.get('category_stats', {}))
+        
+        st.markdown("---")
+        st.subheader("📅 Practice Calendar")
+        render_practice_heatmap(heatmap_data)
+    else:
+        st.markdown("---")
+        st.info("📊 Complete your first practice session to see analytics!")
+    
+    # SECTION 5: Achievements
+    st.markdown("---")
+    st.subheader(f"🏆 Achievements ({milestones_data['total_achieved']}/{milestones_data['total_available']})")
+    render_achievements_grid(milestones_data['milestones'])
+    
+    # SECTION 6: Detailed Breakdown
+    st.markdown("---")
+    st.subheader("📋 Detailed Performance")
+    
+    if progress.get('category_stats'):
+        render_category_breakdown(progress['category_stats'])
+    
+    st.markdown("---")
+    
+    if progress.get('persona_stats'):
+        render_persona_breakdown(progress['persona_stats'], personas)
 
 # TAB 3: LEARN
 with tab3:

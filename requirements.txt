@@ -4,3 +4,7 @@ pydantic
 numpy
 dotenv
 openai
+uvicorn
+requests
+plotly
+python-dateutil
