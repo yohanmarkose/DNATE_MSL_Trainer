@@ -1,0 +1,261 @@
+{
+  "metadata": {
+    "version": "1.0",
+    "total_questions": 20,
+    "hackathon": "DNATE MSL Practice Gym",
+    "date": "2025-10-15",
+    "note": "These are genericized sample questions. Full proprietary question bank available to winning team under NDA."
+  },
+  "questions": [
+    {
+      "id": 1,
+      "category": "Cost & Value",
+      "question": "Why is this therapy so expensive compared to existing treatments?",
+      "difficulty": "high",
+      "persona": ["oncologist", "cardiologist", "neurologist"],
+      "context": "Physician managing cost-conscious patient population in community setting",
+      "tags": ["pricing", "value", "reimbursement", "access"],
+      "estimated_response_time": 90,
+      "key_themes": ["value proposition", "comparative effectiveness", "patient access"]
+    },
+    {
+      "id": 2,
+      "category": "Cost & Value",
+      "question": "The incremental survival benefit doesn't justify the cost. How do you respond?",
+      "difficulty": "high",
+      "persona": ["oncologist"],
+      "context": "Academic physician reviewing clinical trial data with cost-effectiveness lens",
+      "tags": ["cost-effectiveness", "value", "clinical outcomes"],
+      "estimated_response_time": 90,
+      "key_themes": ["quality of life", "patient-centered outcomes", "economic value"]
+    },
+    {
+      "id": 3,
+      "category": "Cost & Value",
+      "question": "My patients can't afford these copays. What patient assistance exists?",
+      "difficulty": "medium",
+      "persona": ["oncologist", "cardiologist", "neurologist"],
+      "context": "Community physician with underinsured patient population",
+      "tags": ["patient assistance", "access", "affordability", "support programs"],
+      "estimated_response_time": 60,
+      "key_themes": ["patient support programs", "financial assistance", "access solutions"]
+    },
+    {
+      "id": 4,
+      "category": "Clinical Data & Evidence",
+      "question": "What are the latest real-world data findings for this treatment?",
+      "difficulty": "medium",
+      "persona": ["oncologist", "cardiologist", "neurologist"],
+      "context": "Evidence-focused physician wanting to see data beyond clinical trials",
+      "tags": ["real-world evidence", "clinical data", "effectiveness"],
+      "estimated_response_time": 90,
+      "key_themes": ["RWE studies", "post-market surveillance", "effectiveness data"]
+    },
+    {
+      "id": 5,
+      "category": "Clinical Data & Evidence",
+      "question": "Is there any data supporting use in combination with other therapies?",
+      "difficulty": "medium",
+      "persona": ["oncologist", "cardiologist"],
+      "context": "Physician considering combination treatment approaches",
+      "tags": ["combination therapy", "clinical data", "drug interactions"],
+      "estimated_response_time": 90,
+      "key_themes": ["combination studies", "synergistic effects", "safety profile"]
+    },
+    {
+      "id": 6,
+      "category": "Clinical Data & Evidence",
+      "question": "Your trial excluded elderly patients. How do I know this works for my population?",
+      "difficulty": "high",
+      "persona": ["oncologist", "cardiologist", "neurologist"],
+      "context": "Community physician with predominantly elderly patient base",
+      "tags": ["trial design", "generalizability", "elderly patients", "inclusion criteria"],
+      "estimated_response_time": 90,
+      "key_themes": ["trial limitations", "real-world applicability", "subgroup data"]
+    },
+    {
+      "id": 7,
+      "category": "Clinical Data & Evidence",
+      "question": "How reliable is your data without a placebo or sham control?",
+      "difficulty": "high",
+      "persona": ["oncologist"],
+      "context": "Academic physician scrutinizing trial methodology",
+      "tags": ["trial design", "methodology", "data validity", "placebo"],
+      "estimated_response_time": 90,
+      "key_themes": ["trial methodology", "evidence quality", "regulatory acceptance"]
+    },
+    {
+      "id": 8,
+      "category": "Patient Acceptance & Treatment Burden",
+      "question": "My patients don't want this therapy. What's the experience in other centers?",
+      "difficulty": "high",
+      "persona": ["oncologist", "neurologist"],
+      "context": "Physician concerned about patient willingness to accept treatment",
+      "tags": ["patient acceptance", "adherence", "real-world experience"],
+      "estimated_response_time": 90,
+      "key_themes": ["patient testimonials", "acceptance rates", "support strategies"]
+    },
+    {
+      "id": 9,
+      "category": "Patient Acceptance & Treatment Burden",
+      "question": "I cannot imagine patients would accept such a burdensome treatment regimen.",
+      "difficulty": "high",
+      "persona": ["oncologist", "cardiologist", "neurologist"],
+      "context": "Physician evaluating treatment burden against potential benefits",
+      "tags": ["treatment burden", "patient experience", "quality of life"],
+      "estimated_response_time": 90,
+      "key_themes": ["burden vs benefit", "patient support", "quality of life data"]
+    },
+    {
+      "id": 10,
+      "category": "Patient Acceptance & Treatment Burden",
+      "question": "How should we deal with patients who don't have adequate caregiver support?",
+      "difficulty": "medium",
+      "persona": ["neurologist", "cardiologist"],
+      "context": "Physician in community setting with limited support resources",
+      "tags": ["caregiver support", "patient resources", "treatment feasibility"],
+      "estimated_response_time": 60,
+      "key_themes": ["support services", "patient independence", "resource availability"]
+    },
+    {
+      "id": 11,
+      "category": "Patient Acceptance & Treatment Burden",
+      "question": "Aren't we just adding to patient suffering with this intervention?",
+      "difficulty": "high",
+      "persona": ["oncologist", "neurologist"],
+      "context": "Physician concerned about quality of life in advanced disease",
+      "tags": ["quality of life", "patient burden", "ethics", "palliative care"],
+      "estimated_response_time": 90,
+      "key_themes": ["QOL data", "patient-centered care", "symptom management"]
+    },
+    {
+      "id": 12,
+      "category": "Clinical Decision-Making & Time Constraints",
+      "question": "I don't have time for this! The treatment decision is complex enough already.",
+      "difficulty": "medium",
+      "persona": ["oncologist", "cardiologist", "neurologist"],
+      "context": "Time-pressed physician in busy clinical practice",
+      "tags": ["time constraints", "workflow", "decision support"],
+      "estimated_response_time": 60,
+      "key_themes": ["decision support tools", "efficiency", "practice integration"]
+    },
+    {
+      "id": 13,
+      "category": "Clinical Decision-Making & Time Constraints",
+      "question": "The administrative burden is huge. Is there a way to make this easier?",
+      "difficulty": "medium",
+      "persona": ["cardiologist", "neurologist"],
+      "context": "Private practice physician concerned about operational impact",
+      "tags": ["administrative burden", "workflow", "practice efficiency"],
+      "estimated_response_time": 60,
+      "key_themes": ["support services", "streamlined processes", "practice resources"]
+    },
+    {
+      "id": 14,
+      "category": "Clinical Decision-Making & Time Constraints",
+      "question": "How can I keep track of patients on this therapy with my current workload?",
+      "difficulty": "medium",
+      "persona": ["oncologist", "cardiologist", "neurologist"],
+      "context": "Busy physician managing large patient panel",
+      "tags": ["patient monitoring", "workflow", "tracking systems"],
+      "estimated_response_time": 60,
+      "key_themes": ["monitoring tools", "remote tracking", "support infrastructure"]
+    },
+    {
+      "id": 15,
+      "category": "Data Validity & Study Design",
+      "question": "If this therapy works on the disease, how do you explain the negative results in your Phase 3 trial?",
+      "difficulty": "high",
+      "persona": ["oncologist"],
+      "context": "Academic physician analyzing seemingly contradictory data",
+      "tags": ["trial results", "mechanism of action", "data interpretation"],
+      "estimated_response_time": 120,
+      "key_themes": ["trial heterogeneity", "patient selection", "endpoint analysis"]
+    },
+    {
+      "id": 16,
+      "category": "Data Validity & Study Design",
+      "question": "The study design seems flawed. Can you walk me through the methodology?",
+      "difficulty": "high",
+      "persona": ["oncologist"],
+      "context": "Skeptical academic physician scrutinizing trial design",
+      "tags": ["study design", "methodology", "data quality"],
+      "estimated_response_time": 120,
+      "key_themes": ["design rationale", "methodological rigor", "regulatory alignment"]
+    },
+    {
+      "id": 17,
+      "category": "Treatment Practicality",
+      "question": "Can patients with pacemakers or other implanted devices use this therapy?",
+      "difficulty": "medium",
+      "persona": ["cardiologist", "neurologist"],
+      "context": "Physician managing patients with comorbidities and implanted devices",
+      "tags": ["contraindications", "device compatibility", "safety"],
+      "estimated_response_time": 60,
+      "key_themes": ["safety profile", "device interactions", "patient eligibility"]
+    },
+    {
+      "id": 18,
+      "category": "Treatment Practicality",
+      "question": "How long do patients have to continue treatment? When can they stop?",
+      "difficulty": "medium",
+      "persona": ["oncologist", "cardiologist", "neurologist"],
+      "context": "Physician planning long-term treatment strategy",
+      "tags": ["treatment duration", "stopping criteria", "maintenance therapy"],
+      "estimated_response_time": 60,
+      "key_themes": ["treatment duration", "disease monitoring", "discontinuation criteria"]
+    },
+    {
+      "id": 19,
+      "category": "Treatment Practicality",
+      "question": "How does a localized therapy work in metastatic disease?",
+      "difficulty": "medium",
+      "persona": ["oncologist"],
+      "context": "Oncologist questioning mechanism in advanced disease state",
+      "tags": ["mechanism of action", "disease stage", "treatment rationale"],
+      "estimated_response_time": 90,
+      "key_themes": ["systemic effects", "mechanism", "treatment paradigm"]
+    },
+    {
+      "id": 20,
+      "category": "Skepticism & Pushback",
+      "question": "This seems too simple to work. What's the actual mechanism of action?",
+      "difficulty": "medium",
+      "persona": ["oncologist", "cardiologist", "neurologist"],
+      "context": "Skeptical physician questioning novel therapeutic approach",
+      "tags": ["mechanism of action", "skepticism", "scientific rationale"],
+      "estimated_response_time": 90,
+      "key_themes": ["scientific basis", "preclinical data", "clinical validation"]
+    }
+  ],
+  "categories": {
+    "Cost & Value": {
+      "description": "Questions about pricing, reimbursement, and economic value",
+      "question_count": 3
+    },
+    "Clinical Data & Evidence": {
+      "description": "Questions about trial data, real-world evidence, and clinical effectiveness",
+      "question_count": 4
+    },
+    "Patient Acceptance & Treatment Burden": {
+      "description": "Questions about patient willingness, treatment burden, and quality of life",
+      "question_count": 4
+    },
+    "Clinical Decision-Making & Time Constraints": {
+      "description": "Questions about workflow, time constraints, and practice integration",
+      "question_count": 3
+    },
+    "Data Validity & Study Design": {
+      "description": "Questions about trial methodology and data interpretation",
+      "question_count": 2
+    },
+    "Treatment Practicality": {
+      "description": "Questions about treatment logistics, duration, and patient eligibility",
+      "question_count": 3
+    },
+    "Skepticism & Pushback": {
+      "description": "Questions expressing general skepticism or disbelief",
+      "question_count": 1
+    }
+  }
+}

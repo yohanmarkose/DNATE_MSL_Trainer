@@ -1,240 +1,220 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List
-from io import BytesIO
-import os, requests, redis, uuid, time, json
-from dotenv import load_dotenv
+from typing import List, Optional
+import json
 from datetime import datetime
-import base64
-# Docling imports
-from bs4 import BeautifulSoup
-from features.pdf_extraction.docling_pdf_extractor import pdf_docling_converter
-
-# from services import s3
-from services.s3 import S3FileManager
-
-load_dotenv()
-
-# Environment Variables
-AWS_BUCKET_NAME = os.getenv("AWS_BUCKET_NAME")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+import uuid
 
 app = FastAPI()
 
-# Redis client setup
-# redis_client = redis.Redis(host="localhost", port=6379, db=0, decode_responses=True)
-
-redis_client = redis.Redis(
-    host=os.getenv("REDIS_HOST"),
-    port=os.getenv("REDIS_PORT"),
-    decode_responses=True,
-    username=os.getenv("REDIS_USERNAME"),
-    password=os.getenv("REDIS_PASSWORD"),
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# Stream name in Redis
-REQUEST_STREAM_NAME = os.getenv("REQUEST_STREAM_NAME")
-RESPONSE_STREAM_NAME = os.getenv("RESPONSE_STREAM_NAME")
-REQUEST_CONSUMER_GROUP = os.getenv("REQUEST_CONSUMER_GROUP")
-RESPONSE_CONSUMER_GROUP = os.getenv("RESPONSE_CONSUMER_GROUP")
-REQUEST_CONSUMER_NAME = os.getenv("REQUEST_CONSUMER_NAME")
-RESPONSE_CONSUMER_NAME = os.getenv("RESPONSE_CONSUMER_NAME")
+# Load JSON files
+with open('questions.json', 'r') as f:
+    questions_data = json.load(f)
 
-class URLInput(BaseModel):
-    url: str
+with open('personas.json', 'r') as f:
+    personas_data = json.load(f)
 
-class PdfInput(BaseModel):
-    file: str
-    file_name: str
-    model: str
+# In-memory storage (replace with database in production)
+sessions_store = {}
+user_progress = {
+    "total_sessions": 0,
+    "category_stats": {},
+    "persona_stats": {},
+    "average_score": 0.0,
+    "scores_history": []
+}
 
-class S3FileListResponse(BaseModel):
-    files: List[str]
+class SessionRequest(BaseModel):
+    question_id: int
+    persona_id: str
+    user_response: str
 
-class SelectPdfResponse(BaseModel):
-    selected_file: str
+class EvaluationResponse(BaseModel):
+    score: float
+    feedback: str
+    priorities_covered: List[str]
+    engagement_points_covered: List[str]
+    missing_points: List[str]
 
-class SummarizeRequest(BaseModel):
-    selected_file: str
-    model: str
-class QuestionRequest(BaseModel):
-    question: str
-    selected_file: str
-    model: str
+@app.get("/personas")
+def get_personas():
+    return personas_data["personas"]
 
-@app.get("/")
-def read_root():
-    return {"message": "Document Chat API: FastAPI Backend with Redis and LiteLLM is running"}
+@app.get("/personas/{persona_id}")
+def get_persona(persona_id: str):
+    persona = next((p for p in personas_data["personas"] if p["id"] == persona_id), None)
+    if not persona:
+        raise HTTPException(status_code=404, detail="Persona not found")
+    return persona
 
-@app.get("/list_pdfcontent", response_model=S3FileListResponse)
-def get_available_files():
-    print("Getting available files")
-    base_path = f"pdf/docling/"
-    print(base_path)
-    s3_obj = S3FileManager(AWS_BUCKET_NAME, base_path)
-    files = list({file.split('/')[-2] for file in s3_obj.list_files() if not file.endswith('.png')})
-    return {"files": files}
+@app.get("/questions")
+def get_questions(
+    persona_id: Optional[str] = None,
+    difficulty: Optional[str] = None,
+    category: Optional[str] = None
+):
+    questions = questions_data["questions"]
+    
+    if persona_id:
+        questions = [q for q in questions if persona_id in q.get("persona", [])]
+    
+    if difficulty:
+        questions = [q for q in questions if q.get("difficulty") == difficulty]
+    
+    if category:
+        questions = [q for q in questions if q.get("category") == category]
+    
+    return questions
 
-@app.post("/select_pdfcontent")
-def get_selected_pdf(request: SelectPdfResponse):
-    base_path = base_path = f"pdf/docling/"
-    s3_obj = S3FileManager(AWS_BUCKET_NAME, base_path)
-    file = f"{base_path}{request.selected_file}/extracted_data.md"
-    content = s3_obj.load_s3_file_content(file)
-    return {"content": content}
+@app.get("/categories")
+def get_categories():
+    return questions_data["categories"]
 
-@app.post("/summarize")
-def summarize_content(request: SummarizeRequest):
-    try:
-        content = request.selected_file
-
-        if not content:
-            raise HTTPException(status_code=400, detail="No content found in selected files")
-        
-        messages = [
-            {"role": "system", "content": "You are a helpful assistant that summarizes document content."},
-            {"role": "user", "content": f"Summarize the following document content in one sentence:\n\n{content}"}
-        ]
-                
-        print(request.model)
-        summary = generate_model_response(request.model, messages)
-        
-        return {
-            "summary": summary,
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generating summary: {str(e)}")
-
-@app.post("/ask_question")
-def ask_question(request: QuestionRequest):
-    try:
-        content = request.selected_file
-        
-        if not content:
-            raise HTTPException(status_code=400, detail="No content found in selected files")
-        
-        # Prepare messages for LLM
-        system_message = """You are a helpful assistant. Please respond based on the following document:
-{context}
-If the question isn't related to the provided documents, politely inform the user that you can only answer questions about the selected documents.""".format(context=content)
-        
-        messages = [
-            {"role": "system", "content": system_message},
-            {"role": "user", "content": request.question}
-        ]
-        
-        answer = generate_model_response(request.model, messages) 
-        
-        return {
-            "answer": answer,
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error answering question: {str(e)}")
-
-# PDF Docling 
-@app.post("/upload_pdf")
-def process_pdf_docling(uploaded_pdf: PdfInput):
-    pdf_content = base64.b64decode(uploaded_pdf.file)
-    # Convert pdf_content to a BytesIO stream for pymupdf
-    pdf_stream = BytesIO(pdf_content)
-    timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    # base_path = f"pdf/docling/{uploaded_pdf.file_name.replace('.','').replace(' ','')}_{timestamp}/"
-    base_path = f"pdf/docling/{uploaded_pdf.file_name.replace('.','').replace(' ','')}/"
-    s3_obj = S3FileManager(AWS_BUCKET_NAME, base_path)
-    s3_obj.upload_file(AWS_BUCKET_NAME, f"{s3_obj.base_path}/{uploaded_pdf.file_name}", pdf_content)
-    file_name, result = pdf_docling_converter(pdf_stream, base_path, s3_obj)
-    return {
-        "message": f"Data Scraped and stored in S3 \n Click the link to Download: https://{s3_obj.bucket_name}.s3.amazonaws.com/{file_name}",
-        "scraped_content": result  # Include the original scraped content in the response
+@app.post("/evaluate", response_model=EvaluationResponse)
+def evaluate_response(session: SessionRequest):
+    # Find question and persona
+    question = next((q for q in questions_data["questions"] if q["id"] == session.question_id), None)
+    persona = next((p for p in personas_data["personas"] if p["id"] == session.persona_id), None)
+    
+    if not question or not persona:
+        raise HTTPException(status_code=404, detail="Question or Persona not found")
+    
+    # Evaluation logic
+    user_response_lower = session.user_response.lower()
+    
+    # Check priorities covered
+    priorities_covered = []
+    for priority in persona["priorities"]:
+        if any(keyword in user_response_lower for keyword in priority.lower().split()[:3]):
+            priorities_covered.append(priority)
+    
+    # Check engagement tips covered
+    engagement_covered = []
+    for tip in persona["engagement_tips"]:
+        if any(keyword in user_response_lower for keyword in tip.lower().split()[:3]):
+            engagement_covered.append(tip)
+    
+    # Check key themes from question
+    themes_covered = 0
+    for theme in question.get("key_themes", []):
+        if theme.lower() in user_response_lower:
+            themes_covered += 1
+    
+    # Calculate score (0-100)
+    priority_score = (len(priorities_covered) / len(persona["priorities"])) * 40
+    engagement_score = (len(engagement_covered) / len(persona["engagement_tips"])) * 40
+    theme_score = (themes_covered / len(question.get("key_themes", [1]))) * 20 if question.get("key_themes") else 20
+    
+    total_score = min(100, priority_score + engagement_score + theme_score)
+    
+    # Generate feedback
+    feedback = f"You scored {total_score:.1f}/100. "
+    if total_score >= 80:
+        feedback += "Excellent response! "
+    elif total_score >= 60:
+        feedback += "Good response, but could be improved. "
+    else:
+        feedback += "Your response needs improvement. "
+    
+    missing_priorities = [p for p in persona["priorities"] if p not in priorities_covered]
+    missing_engagement = [e for e in persona["engagement_tips"] if e not in engagement_covered]
+    
+    # Store session
+    session_id = str(uuid.uuid4())
+    sessions_store[session_id] = {
+        "id": session_id,
+        "question_id": session.question_id,
+        "persona_id": session.persona_id,
+        "user_response": session.user_response,
+        "score": total_score,
+        "timestamp": datetime.now().isoformat(),
+        "category": question["category"]
     }
     
-
-# Web Docling  
-@app.post("/scrape-url-docling")
-def process_docling_url(url_input: URLInput):
-    response = requests.get(url_input.url)
-    soup = BeautifulSoup(response.content, "html.parser")
-    html_content = soup.encode("utf-8")
-    html_stream = BytesIO(html_content)
+    # Update progress
+    update_progress(question["category"], session.persona_id, total_score)
     
-    # Setting the S3 bucket path and filename
-    html_title = f"URL_{soup.title.string}.txt"
-    print(html_title)
-    base_path = f"web/docling/{html_title.replace('.','').replace(' ','').replace(',','').replace("’","").replace('+','')}/"
+    return EvaluationResponse(
+        score=total_score,
+        feedback=feedback,
+        priorities_covered=priorities_covered,
+        engagement_points_covered=engagement_covered,
+        missing_points=missing_priorities[:3] + missing_engagement[:3]
+    )
 
-    s3_obj = S3FileManager(AWS_BUCKET_NAME, base_path)
-    s3_obj.upload_file(AWS_BUCKET_NAME, f"{s3_obj.base_path}/{html_title}", BytesIO(url_input.url.encode('utf-8')))
-    file_name, result = url_docling_converter(html_stream, url_input.url, base_path, s3_obj)
-
-    return {
-        "message": f"Data Scraped and stored in S3 \n Click the link to Download: https://{s3_obj.bucket_name}.s3.amazonaws.com/{file_name}",
-        "scraped_content": result  # Include the original scraped content in the response
+@app.get("/model-answer/{question_id}")
+def get_model_answer(question_id: int):
+    question = next((q for q in questions_data["questions"] if q["id"] == question_id), None)
+    if not question:
+        raise HTTPException(status_code=404, detail="Question not found")
+    
+    # Generate model answer based on question themes
+    model_answer = {
+        "question_id": question_id,
+        "question": question["question"],
+        "category": question["category"],
+        "model_answer": generate_model_answer(question),
+        "key_points": question.get("key_themes", []),
+        "reasoning": f"This answer addresses the {question['category']} concern by covering: {', '.join(question.get('key_themes', []))}."
     }
     
-def get_pdf_content(request: QuestionRequest):
-    base_path = base_path = f"pdf/docling/"
-    s3_obj = S3FileManager(AWS_BUCKET_NAME, base_path)
-    file = f"{base_path}{request.selected_file}/extracted_data.md"
-    content = s3_obj.load_s3_file_content(file)
-    return content
+    return model_answer
 
-def generate_model_response(model, messages):
-    request_data = {
-        "id": str(uuid.uuid4()),  # Generate a unique request ID
-        "model": model,  # Replace with an available model for LiteLLM
-        "prompt": messages
+@app.get("/progress")
+def get_progress():
+    return user_progress
+
+@app.get("/sessions")
+def get_sessions():
+    return list(sessions_store.values())
+
+def update_progress(category: str, persona_id: str, score: float):
+    user_progress["total_sessions"] += 1
+    
+    # Update category stats
+    if category not in user_progress["category_stats"]:
+        user_progress["category_stats"][category] = {"count": 0, "avg_score": 0, "total_score": 0}
+    
+    cat_stats = user_progress["category_stats"][category]
+    cat_stats["count"] += 1
+    cat_stats["total_score"] += score
+    cat_stats["avg_score"] = cat_stats["total_score"] / cat_stats["count"]
+    
+    # Update persona stats
+    if persona_id not in user_progress["persona_stats"]:
+        user_progress["persona_stats"][persona_id] = {"count": 0, "avg_score": 0, "total_score": 0}
+    
+    pers_stats = user_progress["persona_stats"][persona_id]
+    pers_stats["count"] += 1
+    pers_stats["total_score"] += score
+    pers_stats["avg_score"] = pers_stats["total_score"] / pers_stats["count"]
+    
+    # Update overall average
+    user_progress["scores_history"].append(score)
+    user_progress["average_score"] = sum(user_progress["scores_history"]) / len(user_progress["scores_history"])
+
+def generate_model_answer(question):
+    # Template for model answers based on category
+    templates = {
+        "Cost & Value": "I understand the cost concern. Let me address the value proposition by highlighting...",
+        "Clinical Data & Evidence": "That's an excellent question about the data. Let me walk you through...",
+        "Patient Acceptance & Treatment Burden": "Patient experience is crucial. Here's what we're seeing...",
+        "Clinical Decision-Making & Time Constraints": "I appreciate your time constraints. Let me provide the key information...",
+        "Data Validity & Study Design": "Let me explain the study methodology...",
+        "Treatment Practicality": "That's a practical consideration. Here's how it works...",
+        "Skepticism & Pushback": "I appreciate your skepticism. Let me address that directly..."
     }
     
-    response = redis_communication(request_data)
+    base = templates.get(question["category"], "Let me address your question...")
+    themes = " I'll cover " + ", ".join(question.get("key_themes", [])) + "."
     
-    return response
-
-def redis_communication(request_data):
-    # Push request to Redis queue
-    print("Pushing request to Redis Stream")
-    
-    # Serialize nested data (if any) before passing to Redis
-    for key, value in request_data.items():
-        if isinstance(value, (dict, list)):
-            request_data[key] = json.dumps(value)  # Convert dict/list to a JSON string
-    
-    print("Adding data to stream...")
-    redis_client.xadd(REQUEST_STREAM_NAME, request_data)
-    
-    print(f"Request {request_data['id']} pushed to Redis Stream!")
-
-    # Poll Redis for the response
-    response_key = f"response:{request_data['id']}"
-    timeout = 30  # Maximum wait time in seconds
-    start_time = time.time()
-
-    print("Waiting for response...")
-
-    while time.time() - start_time < timeout:
-
-        response_data = redis_client.xreadgroup(
-            RESPONSE_CONSUMER_GROUP, RESPONSE_CONSUMER_NAME, {RESPONSE_STREAM_NAME: ">"}, count=1, block=0
-        )
-        
-        if response_data:
-            # print(response_data)
-            for stream_name, message_data in response_data:
-                print(stream_name)
-                for message_id, data in message_data:
-                    if data['id'] == request_data['id']:
-                        # print(data['response'])
-                        print(f"Response received for {data['id']}")
-                        response = json.loads(data['response'])
-                        redis_client.xack(RESPONSE_STREAM_NAME, RESPONSE_CONSUMER_GROUP, message_id)
-                        print("Response received successfully")
-                        # Extract message content safely
-                        if "choices" in response and isinstance(response["choices"], list):
-                            message_content = response["choices"][0].get("message", {}).get("content", "No content found")
-                            print(f"Generated Response: {message_content}")
-                            return message_content
-                        else:
-                            print("Error: 'choices' field missing or invalid format in response")
-                
-    
-    return "Error: Timeout reached while waiting for response"
+    return base + themes

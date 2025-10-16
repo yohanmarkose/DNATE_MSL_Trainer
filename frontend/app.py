@@ -1,281 +1,317 @@
-import json
-import time
 import streamlit as st
-import requests, os, base64
-from dotenv import load_dotenv
-from litellm import completion
-from io import StringIO
-from dotenv import load_dotenv
+import requests
+import random
+from datetime import datetime
 
-load_dotenv()
+API_BASE_URL = "http://localhost:8000"
 
+# Initialize session state
+if 'selected_persona' not in st.session_state:
+    st.session_state.selected_persona = None
+if 'selected_question' not in st.session_state:
+    st.session_state.selected_question = None
+if 'user_response' not in st.session_state:
+    st.session_state.user_response = ""
+if 'evaluation_result' not in st.session_state:
+    st.session_state.evaluation_result = None
 
-# API_URL = os.getenv("API_DNS")
-API_URL = "http://localhost:8000"
+st.set_page_config(page_title="MSL Practice Gym", layout="wide")
 
-if "page" not in st.session_state:
-    st.session_state.page = "Document Parser"
-if "text_url" not in st.session_state:
-    st.session_state.text_url = ""
-if "file_upload" not in st.session_state:
-    st.session_state.file_upload = None
-if 'mode' not in st.session_state:
-    st.session_state.mode = 'preview'
-if 'messages' not in st.session_state:
-    st.session_state.messages = []
-if 'pdf_content' not in st.session_state:
-    st.session_state.pdf_content = ""
-if 'selected_file' not in st.session_state:
-    st.session_state.selected_file = None
-if 'preview_content' not in st.session_state:
-    st.session_state.preview_content = ""
-if 'file_selected' not in st.session_state:
-    st.session_state.file_selected = False
- 
-def main():
-    # Set up navigation
-    st.sidebar.header("Main Menu")
+st.title("🏋️ DNATE MSL Practice Gym")
 
-    page = st.sidebar.radio("Choose a page:", ["Document Parser", "Chat with Documents","Logging Metrics"])
+# Create tabs
+tab1, tab2, tab3, tab4 = st.tabs(["🎯 Practice", "📊 Track", "📚 Learn", "💬 Sessions"])
+
+# TAB 1: PRACTICE
+with tab1:
+    st.header("Practice Session")
     
-    st.session_state.page = page    
-    if page == "Document Parser":
-        document_parser_page()
-    elif page == "Chat with Documents":
-        chat_page()
-    elif page == "Logging Metrics":
-        athina_logging()
-
-def athina_logging():
-    import streamlit as st
-
-    st.title("Athina Logging 📊")
-
-    st.info("⚠️ If you have trouble observe the logs open [Athina AI](https://app.athina.ai/) or try logging in via Email OTP option")
-    ATHINA_DATASET_URL = os.getenv("ATHINA_DATASET_URL")
-
-    st.markdown(
-        f"""
-        <iframe src="{ATHINA_DATASET_URL}" width="100%" height="700px" style="border:none;"></iframe>
-        """,
-        unsafe_allow_html=True,
-    )
-
- 
+    # New Session Button
+    if st.button("🔄 Start New Session", type="primary"):
+        st.session_state.selected_persona = None
+        st.session_state.selected_question = None
+        st.session_state.user_response = ""
+        st.session_state.evaluation_result = None
+        st.rerun()
     
-def document_parser_page():
-    # Set the title of the app
-    st.title("Select PDF for Parsing... 📃")
-            
-    if "file_upload" not in st.session_state:
-        st.session_state.file_upload = None
-      
-    st.session_state.file_upload = st.file_uploader("Choose a PDF File", type="pdf", accept_multiple_files=False)    
-    convert = st.button("Process", use_container_width=True)
+    # Persona Selection
+    st.subheader("1. Select Physician Persona")
+    personas = requests.get(f"{API_BASE_URL}/personas").json()
+    
+    col1, col2, col3 = st.columns(3)
+    
+    for idx, persona in enumerate(personas):
+        col = [col1, col2, col3][idx]
+        with col:
+            if st.button(
+                f"**{persona['name']}**\n\n{persona['title']}\n\n{persona['specialty']}",
+                key=f"persona_{persona['id']}",
+                use_container_width=True
+            ):
+                st.session_state.selected_persona = persona['id']
+                st.rerun()
+    
+    if st.session_state.selected_persona:
+        st.success(f"Selected: {next(p['name'] for p in personas if p['id'] == st.session_state.selected_persona)}")
         
-    # Define what happens on each page
-    if convert:
-        if st.session_state.file_upload:
-            st.success(f"File '{st.session_state.file_upload.name}' uploaded successfully!")
-            convert_PDF_to_markdown(st.session_state.file_upload)
-        else:
-            st.info("Please upload a PDF file.")
-            
-def chat_page():
-    st.title("Chat with your parsed documents... 🤖")
-
-    # Get available files from API
-    try:
-        response = requests.get(f"{API_URL}/list_pdfcontent")
-        if response.status_code == 200:
-            available_files = response.json()["files"]
-        else:
-            st.error("Error fetching available files")
-            available_files = []
-    except Exception as e:
-        st.error(f"Error connecting to API: {e}")
-        available_files = []
-    
-    model_options = {
-        "OpenAI": "gpt-4o-mini",
-        "GROK xAI": "xai/grok-2-latest",
-        "Gemini": "r",
-        "HuggingFace": "huggingface/Qwen/Qwen2.5-Coder-32B-Instruct"
-    }
-
-    # Model selection dropdown
-    selected_model = st.sidebar.selectbox("Choose LLM", options=list(model_options.keys()))
-    model_name = model_options[selected_model]
-    
-    # File selection
-    selected_file = st.sidebar.selectbox(
-        "Select PDF for Context",
-        options=available_files,
-    )
-    
-    # Update the session state only when the selection changes
-    if selected_file != st.session_state.selected_file:
-        st.session_state.selected_file = selected_file
-    
-    # Select PDF
-    if st.sidebar.button("Select"):
-        try:
-            response = requests.post(
-                f"{API_URL}/select_pdfcontent",
-                json={
-                    "selected_file": st.session_state.selected_file
-                }
+        # Get persona details
+        persona_details = requests.get(f"{API_BASE_URL}/personas/{st.session_state.selected_persona}").json()
+        
+        with st.expander("👤 View Persona Details"):
+            st.write(f"**Practice Setting:** {persona_details['practice_setting']['type']}")
+            st.write(f"**Communication Style:** {persona_details['communication_style']['tone']}")
+            st.write("**Priorities:**")
+            for priority in persona_details['priorities'][:3]:
+                st.write(f"- {priority}")
+        
+        # Filters
+        st.subheader("2. Filter Questions")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            difficulty = st.selectbox(
+                "Difficulty",
+                ["All", "low", "medium", "high"]
             )
-            if response.status_code == 200:
-                reset_state()
-                st.session_state.pdf_content = response.json()["content"]
-            else:
-                st.error(f"Error in Upload: {response.text}")
-        except Exception as e:
-            st.sidebar.error(f"Error: {e}")
-    if st.session_state.pdf_content:
-        st.session_state.file_selected = True
-        st.sidebar.markdown("Selected ✅")
-    else:
-        st.sidebar.markdown("Not Selected ❌")
-
-    # Define a callback function for the toggle
-    if st.session_state.file_selected:
-        mode_options = ["preview", "chat"]
-        current_index = 1 if st.session_state.mode == 'chat' else 0
         
-        # callback function to ensure state updates correctly
-        def on_mode_change():
-            st.session_state.mode = st.session_state.mode_radio
-        selected_mode = st.radio(
-            "Mode",
-            options=mode_options,
-            index=current_index,
-            format_func=lambda x: "Preview" if x == "preview" else "Chat",
-            key="mode_radio",
-            on_change=on_mode_change,
-            horizontal=True
-        )
-        current_mode = st.session_state.mode
+        with col2:
+            categories = requests.get(f"{API_BASE_URL}/categories").json()
+            category = st.selectbox(
+                "Category",
+                ["All"] + list(categories.keys())
+            )
         
-        if current_mode == 'preview':
-            st.session_state.preview_content = f"### {st.session_state.selected_file} - Preview \n\n {st.session_state.pdf_content}"
-            st.markdown(st.session_state.preview_content)
-
-        # Chat Functionality
-        if current_mode == 'chat':
-            # Display chat messages
-            for message in st.session_state.messages:
-                with st.chat_message(message["role"]):
-                    st.markdown(message["content"])
+        # Get filtered questions
+        params = {"persona_id": st.session_state.selected_persona}
+        if difficulty != "All":
+            params["difficulty"] = difficulty
+        if category != "All":
+            params["category"] = category
+        
+        questions = requests.get(f"{API_BASE_URL}/questions", params=params).json()
+        
+        st.write(f"**{len(questions)} questions available**")
+        
+        # Question Selection
+        st.subheader("3. Select Question")
+        
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            if questions:
+                selected_q = st.selectbox(
+                    "Choose a question",
+                    questions,
+                    format_func=lambda q: f"{q['category']} - {q['question'][:80]}..."
+                )
+        
+        with col2:
+            if st.button("🎲 Random Question") and questions:
+                selected_q = random.choice(questions)
+                st.session_state.selected_question = selected_q
+                st.rerun()
+        
+        if questions:
+            if st.button("Select This Question"):
+                st.session_state.selected_question = selected_q
+                st.rerun()
+        
+        # Question Card
+        if st.session_state.selected_question:
+            q = st.session_state.selected_question
             
-            # Chat input
-            if prompt := st.chat_input("Ask a question about the documents..."):
-                # Add user message
-                st.session_state.messages.append({"role": "user", "content": prompt})
+            st.divider()
+            st.subheader("4. Your Practice Question")
+            
+            with st.container():
+                st.markdown(f"""
+                <div style="padding: 20px; background-color: #f0f2f6; border-radius: 10px; border-left: 5px solid #1f77b4;">
+                    <h3 style="margin-top: 0;">❓ {q['question']}</h3>
+                    <p><strong>Category:</strong> {q['category']}</p>
+                    <p><strong>Difficulty:</strong> {q['difficulty'].upper()}</p>
+                    <p><strong>Context:</strong> {q['context']}</p>
+                    <p><strong>Estimated Time:</strong> {q['estimated_response_time']} seconds</p>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            st.divider()
+            
+            # Response Input
+            st.subheader("5. Your Response")
+            
+            user_response = st.text_area(
+                "Type your response as an MSL:",
+                value=st.session_state.user_response,
+                height=200,
+                key="response_input"
+            )
+            
+            if st.button("✅ Submit Response", type="primary"):
+                if user_response.strip():
+                    # Evaluate response
+                    payload = {
+                        "question_id": q["id"],
+                        "persona_id": st.session_state.selected_persona,
+                        "user_response": user_response
+                    }
+                    
+                    with st.spinner("Evaluating your response..."):
+                        result = requests.post(f"{API_BASE_URL}/evaluate", json=payload).json()
+                        st.session_state.evaluation_result = result
+                        st.session_state.user_response = user_response
+                        st.rerun()
+                else:
+                    st.error("Please provide a response before submitting.")
+            
+            # Show Evaluation
+            if st.session_state.evaluation_result:
+                result = st.session_state.evaluation_result
                 
-                with st.chat_message("user"):
-                    st.markdown(prompt)
+                st.divider()
+                st.subheader("📈 Evaluation Results")
                 
-                with st.chat_message("assistant"):
-                    with st.spinner("Thinking..."):
-                        try:
-                            response = requests.post(
-                                f"{API_URL}/ask_question",
-                                json={
-                                    "question": prompt,
-                                    "selected_file": st.session_state.pdf_content,
-                                    "model": model_name
-                                }
-                            )
-                            
-                            if response.status_code == 200:
-                                answer = response.json()["answer"]
-                                st.markdown(answer)
-                                st.session_state.messages.append({"role": "assistant", "content": answer})
-                            else:
-                                error_message = f"Error: {response.text}"
-                                st.error(error_message)
-                                st.session_state.messages.append({"role": "assistant", "content": error_message})
-                        except Exception as e:
-                            error_message = f"Error: {str(e)}"
-                            st.error(error_message)
-                            st.session_state.messages.append({"role": "assistant", "content": error_message})
-            # Summarize button
-            if st.button("Summarize"):
-                with st.chat_message("assistant"):
-                    with st.spinner("Generating Summary..."):
-                        try:
-                            response = requests.post(
-                                f"{API_URL}/summarize",
-                                json={
-                                    "selected_file": st.session_state.pdf_content,
-                                    "model": model_name
-                                }
-                            )
-                            if response.status_code == 200:
-                                summary = response.json()["summary"]
-                                st.markdown(summary)
-                                st.session_state.messages.append({"role": "assistant", "content": summary})
-                            else:
-                                error_message = f"Error: {response.text}"
-                                st.error(error_message)
-                                st.session_state.messages.append({"role": "assistant", "content": error_message})
-                        except Exception as e:
-                            error_message = f"Error: {str(e)}"
-                            st.error(error_message)
-                            st.session_state.messages.append({"role": "assistant", "content": error_message})
+                # Score display
+                score = result['score']
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.metric("Your Score", f"{score:.1f}/100")
+                
+                with col2:
+                    if score >= 80:
+                        st.success("Excellent! 🌟")
+                    elif score >= 60:
+                        st.info("Good! 👍")
+                    else:
+                        st.warning("Needs Work 📝")
+                
+                st.write("**Feedback:**", result['feedback'])
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.write("**✅ Priorities Covered:**")
+                    if result['priorities_covered']:
+                        for p in result['priorities_covered']:
+                            st.write(f"- {p}")
+                    else:
+                        st.write("None")
+                
+                with col2:
+                    st.write("**✅ Engagement Points Covered:**")
+                    if result['engagement_points_covered']:
+                        for e in result['engagement_points_covered']:
+                            st.write(f"- {e}")
+                    else:
+                        st.write("None")
+                
+                if result['missing_points']:
+                    st.write("**❌ Consider Adding:**")
+                    for m in result['missing_points'][:5]:
+                        st.write(f"- {m}")
 
-        # Reset chat button
-        if st.sidebar.button("Reset Chat"):
-            reset_state()
-            st.session_state.file_selected = False
-
-def reset_state():
-    st.session_state.messages = []
-    st.session_state.pdf_content = ""
-    st.session_state.preview_content = ""
-    st.session_state.mode = 'preview'
-        
-def convert_PDF_to_markdown(file_upload):    
-    progress_bar = st.progress(0)
-    progress_text = st.empty()
+# TAB 2: TRACK
+with tab2:
+    st.header("📊 Your Progress")
     
-    progress_text.text("Uploading file...")
-    progress_bar.progress(20)
-
-    if file_upload is not None:
-        bytes_data = file_upload.read()
-        base64_pdf = base64.b64encode(bytes_data).decode('utf-8')
-        
-        progress_text.text("Sending file for processing...")
-        progress_bar.progress(50)
-
-        response = requests.post(f"{API_URL}/upload_pdf", json={"file": base64_pdf, "file_name": file_upload.name, "model": ""})
-        
-        progress_text.text("Processing document...")
-        progress_bar.progress(75)
-        
-        try:
-            if response.status_code == 200:
-                data = response.json()
-                progress_text.text("Finalizing output...")
-                st.subheader(data["message"])
-                st.markdown(data["scraped_content"], unsafe_allow_html=True)
-            else:
-                st.error("Server not responding.")
-        except:
-            st.error("An error occurred while processing the PDF.")
+    progress = requests.get(f"{API_BASE_URL}/progress").json()
     
-    progress_bar.progress(100)
-    progress_text.empty()
-    progress_bar.empty()        
+    col1, col2, col3 = st.columns(3)
     
-if __name__ == "__main__":
-# Set page configuration
-    st.set_page_config(
-        page_title="Document Parser",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )    
-    main()
+    with col1:
+        st.metric("Total Sessions", progress['total_sessions'])
+    
+    with col2:
+        st.metric("Average Score", f"{progress['average_score']:.1f}")
+    
+    with col3:
+        if progress['scores_history']:
+            trend = "📈" if len(progress['scores_history']) > 1 and progress['scores_history'][-1] > progress['scores_history'][0] else "📊"
+            st.metric("Trend", trend)
+    
+    st.divider()
+    
+    # Category Performance
+    if progress['category_stats']:
+        st.subheader("Performance by Category")
+        
+        for category, stats in progress['category_stats'].items():
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.write(f"**{category}**")
+                st.progress(stats['avg_score'] / 100)
+            with col2:
+                st.write(f"{stats['avg_score']:.1f} ({stats['count']} sessions)")
+    
+    st.divider()
+    
+    # Persona Performance
+    if progress['persona_stats']:
+        st.subheader("Performance by Persona")
+        
+        personas = requests.get(f"{API_BASE_URL}/personas").json()
+        
+        for persona_id, stats in progress['persona_stats'].items():
+            persona_name = next((p['name'] for p in personas if p['id'] == persona_id), persona_id)
+            
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.write(f"**{persona_name}**")
+                st.progress(stats['avg_score'] / 100)
+            with col2:
+                st.write(f"{stats['avg_score']:.1f} ({stats['count']} sessions)")
+
+# TAB 3: LEARN
+with tab3:
+    st.header("📚 Model Answers")
+    
+    questions = requests.get(f"{API_BASE_URL}/questions").json()
+    
+    category_filter = st.selectbox(
+        "Filter by Category",
+        ["All"] + list(set(q['category'] for q in questions))
+    )
+    
+    if category_filter != "All":
+        questions = [q for q in questions if q['category'] == category_filter]
+    
+    for q in questions:
+        with st.expander(f"**{q['category']}** - {q['question']}"):
+            model_ans = requests.get(f"{API_BASE_URL}/model-answer/{q['id']}").json()
+            
+            st.write("**Model Answer:**")
+            st.info(model_ans['model_answer'])
+            
+            st.write("**Key Points to Cover:**")
+            for point in model_ans['key_points']:
+                st.write(f"- {point}")
+            
+            st.write("**Reasoning:**")
+            st.write(model_ans['reasoning'])
+
+# TAB 4: SESSIONS
+with tab4:
+    st.header("💬 Your Practice Sessions")
+    
+    sessions = requests.get(f"{API_BASE_URL}/sessions").json()
+    
+    if not sessions:
+        st.info("No sessions yet. Start practicing!")
+    else:
+        sessions_sorted = sorted(sessions, key=lambda x: x['timestamp'], reverse=True)
+        
+        for session in sessions_sorted:
+            personas = requests.get(f"{API_BASE_URL}/personas").json()
+            questions = requests.get(f"{API_BASE_URL}/questions").json()
+            
+            persona_name = next((p['name'] for p in personas if p['id'] == session['persona_id']), "Unknown")
+            question = next((q for q in questions if q['id'] == session['question_id']), None)
+            
+            with st.expander(f"**{session['timestamp'][:10]}** - {persona_name} - Score: {session['score']:.1f}"):
+                if question:
+                    st.write(f"**Question:** {question['question']}")
+                st.write(f"**Category:** {session['category']}")
+                st.write(f"**Your Response:**")
+                st.write(session['user_response'])
+                st.write(f"**Score:** {session['score']:.1f}/100")
