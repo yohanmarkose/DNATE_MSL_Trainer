@@ -5,6 +5,9 @@ from typing import List, Optional
 import json
 from datetime import datetime
 import uuid
+from dotenv import load_dotenv
+import os
+from openai import OpenAI
 
 app = FastAPI()
 
@@ -15,6 +18,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+load_dotenv()
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # Load JSON files
 with open('questions.json', 'r') as f:
@@ -76,98 +82,227 @@ def get_questions(
     return questions
 
 @app.get("/categories")
-def get_categories():
-    return questions_data["categories"]
+def get_categories(persona_id: Optional[str] = None):
+    """Get categories, optionally filtered by persona"""
+    
+    if not persona_id:
+        return questions_data["categories"]
+    
+    persona_questions = [
+        q for q in questions_data["questions"] 
+        if persona_id in q.get("persona", [])
+    ]
+
+    available_categories = set(q["category"] for q in persona_questions)
+    
+    # Filter the categories dict to only include available ones
+    filtered_categories = {
+        cat_name: cat_info 
+        for cat_name, cat_info in questions_data["categories"].items()
+        if cat_name in available_categories
+    }
+    
+    for cat_name in filtered_categories:
+        count = sum(1 for q in persona_questions if q["category"] == cat_name)
+        filtered_categories[cat_name]["question_count"] = count
+    
+    return filtered_categories
+
+@app.get("/scenario/{question_id}/{persona_id}")
+def get_scenario(question_id: int, persona_id: str):
+    question = next((q for q in questions_data["questions"] if q["id"] == question_id), None)
+    persona = next((p for p in personas_data["personas"] if p["id"] == persona_id), None)
+    
+    if not question or not persona:
+        raise HTTPException(status_code=404, detail="Question or Persona not found")
+    
+    scenario_prompt = f"""Create a realistic, engaging scenario for an MSL practice session.
+
+Physician Persona:
+- {persona['name']}, {persona['title']}
+- {persona['specialty']} at {persona['practice_setting']['type']}
+- Communication Style: {persona['communication_style']['tone']}
+- Common Challenges: {', '.join(persona['common_challenges'][:2])}
+
+Question Context: {question['context']}
+Question Category: {question['category']}
+
+Create a brief (3-4 sentence) scenario that sets up WHY this physician is asking this question. Include:
+- The specific situation or patient case prompting the question
+- The physician's mindset/concern
+- Any relevant practice context
+
+Make it realistic and immersive."""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are creating realistic medical scenarios for MSL training."},
+                {"role": "user", "content": scenario_prompt}
+            ],
+            temperature=0.7,
+            max_tokens=200
+        )
+        
+        return {
+            "question_id": question_id,
+            "persona_id": persona_id,
+            "scenario": response.choices[0].message.content,
+            "question": question['question']
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Scenario generation failed: {str(e)}")
 
 @app.post("/evaluate", response_model=EvaluationResponse)
 def evaluate_response(session: SessionRequest):
-    # Find question and persona
     question = next((q for q in questions_data["questions"] if q["id"] == session.question_id), None)
     persona = next((p for p in personas_data["personas"] if p["id"] == session.persona_id), None)
     
     if not question or not persona:
         raise HTTPException(status_code=404, detail="Question or Persona not found")
     
-    # Evaluation logic
-    user_response_lower = session.user_response.lower()
+    # Use OpenAI for evaluation
+    evaluation_prompt = f"""You are evaluating an MSL's response to a physician question. 
+
+Physician Persona:
+- Name: {persona['name']}
+- Specialty: {persona['specialty']}
+- Practice Setting: {persona['practice_setting']['type']}
+- Key Priorities: {', '.join(persona['priorities'][:3])}
+- Communication Style: {persona['communication_style']['tone']}
+
+Question Asked: {question['question']}
+Category: {question['category']}
+Key Themes to Address: {', '.join(question.get('key_themes', []))}
+
+MSL's Response:
+{session.user_response}
+
+Evaluate this response on a 0-100 scale using these criteria:
+1. Addressing Physician Priorities (40 points): How well does the response align with this persona's priorities?
+2. Engagement Techniques (30 points): Does it use appropriate communication style and engagement approaches for this persona?
+3. Key Themes Coverage (20 points): Does it cover the key themes for this question?
+4. Professionalism (10 points): Tone, clarity, and structure.
+
+Respond in this JSON format:
+{{
+  "score": <number 0-100>,
+  "feedback": "<2-3 sentence overall feedback>",
+  "priorities_covered": ["<priority 1>", "<priority 2>"],
+  "engagement_points_covered": ["<engagement point 1>", "<engagement point 2>"],
+  "missing_points": ["<what could be improved 1>", "<what could be improved 2>"],
+  "detailed_breakdown": {{
+    "priorities_score": <0-40>,
+    "engagement_score": <0-30>,
+    "themes_score": <0-20>,
+    "professionalism_score": <0-10>
+  }}
+}}"""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are an expert MSL trainer evaluating responses. Provide structured, actionable feedback."},
+                {"role": "user", "content": evaluation_prompt}
+            ],
+            temperature=0.3,
+            response_format={"type": "json_object"}
+        )
+        
+        result = json.loads(response.choices[0].message.content)
+        
+        # Store session
+        session_id = str(uuid.uuid4())
+        sessions_store[session_id] = {
+            "id": session_id,
+            "question_id": session.question_id,
+            "persona_id": session.persona_id,
+            "user_response": session.user_response,
+            "score": result["score"],
+            "timestamp": datetime.now().isoformat(),
+            "category": question["category"]
+        }
+        
+        # Update progress
+        update_progress(question["category"], session.persona_id, result["score"])
+        
+        return EvaluationResponse(
+            score=result["score"],
+            feedback=result["feedback"],
+            priorities_covered=result.get("priorities_covered", []),
+            engagement_points_covered=result.get("engagement_points_covered", []),
+            missing_points=result.get("missing_points", [])
+        )
     
-    # Check priorities covered
-    priorities_covered = []
-    for priority in persona["priorities"]:
-        if any(keyword in user_response_lower for keyword in priority.lower().split()[:3]):
-            priorities_covered.append(priority)
-    
-    # Check engagement tips covered
-    engagement_covered = []
-    for tip in persona["engagement_tips"]:
-        if any(keyword in user_response_lower for keyword in tip.lower().split()[:3]):
-            engagement_covered.append(tip)
-    
-    # Check key themes from question
-    themes_covered = 0
-    for theme in question.get("key_themes", []):
-        if theme.lower() in user_response_lower:
-            themes_covered += 1
-    
-    # Calculate score (0-100)
-    priority_score = (len(priorities_covered) / len(persona["priorities"])) * 40
-    engagement_score = (len(engagement_covered) / len(persona["engagement_tips"])) * 40
-    theme_score = (themes_covered / len(question.get("key_themes", [1]))) * 20 if question.get("key_themes") else 20
-    
-    total_score = min(100, priority_score + engagement_score + theme_score)
-    
-    # Generate feedback
-    feedback = f"You scored {total_score:.1f}/100. "
-    if total_score >= 80:
-        feedback += "Excellent response! "
-    elif total_score >= 60:
-        feedback += "Good response, but could be improved. "
-    else:
-        feedback += "Your response needs improvement. "
-    
-    missing_priorities = [p for p in persona["priorities"] if p not in priorities_covered]
-    missing_engagement = [e for e in persona["engagement_tips"] if e not in engagement_covered]
-    
-    # Store session
-    session_id = str(uuid.uuid4())
-    sessions_store[session_id] = {
-        "id": session_id,
-        "question_id": session.question_id,
-        "persona_id": session.persona_id,
-        "user_response": session.user_response,
-        "score": total_score,
-        "timestamp": datetime.now().isoformat(),
-        "category": question["category"]
-    }
-    
-    # Update progress
-    update_progress(question["category"], session.persona_id, total_score)
-    
-    return EvaluationResponse(
-        score=total_score,
-        feedback=feedback,
-        priorities_covered=priorities_covered,
-        engagement_points_covered=engagement_covered,
-        missing_points=missing_priorities[:3] + missing_engagement[:3]
-    )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
 
 @app.get("/model-answer/{question_id}")
-def get_model_answer(question_id: int):
+def get_model_answer(question_id: int, persona_id: Optional[str] = None):
     question = next((q for q in questions_data["questions"] if q["id"] == question_id), None)
     if not question:
         raise HTTPException(status_code=404, detail="Question not found")
     
-    # Generate model answer based on question themes
-    model_answer = {
-        "question_id": question_id,
-        "question": question["question"],
-        "category": question["category"],
-        "model_answer": generate_model_answer(question),
-        "key_points": question.get("key_themes", []),
-        "reasoning": f"This answer addresses the {question['category']} concern by covering: {', '.join(question.get('key_themes', []))}."
-    }
+    # Get persona if provided
+    persona = None
+    if persona_id:
+        persona = next((p for p in personas_data["personas"] if p["id"] == persona_id), None)
     
-    return model_answer
+    model_prompt = f"""Create a model answer for an MSL responding to this physician question.
+
+Question: {question['question']}
+Category: {question['category']}
+Context: {question['context']}
+Key Themes to Cover: {', '.join(question.get('key_themes', []))}
+"""
+
+    if persona:
+        model_prompt += f"""
+Physician Persona:
+- {persona['name']}, {persona['specialty']}
+- Priorities: {', '.join(persona['priorities'][:3])}
+- Communication Style: {persona['communication_style']['tone']}
+- Engagement Tips: {', '.join(persona['engagement_tips'][:3])}
+"""
+
+    model_prompt += """
+Create a strong MSL response (200-250 words) that:
+1. Directly addresses the question
+2. Covers the key themes
+3. Uses appropriate communication style for this persona (if provided)
+4. Is evidence-based and professional
+
+Also provide:
+- 4-5 key points that should be covered
+- Brief reasoning for the approach"""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are an expert MSL trainer creating model answers."},
+                {"role": "user", "content": model_prompt}
+            ],
+            temperature=0.5,
+            max_tokens=500
+        )
+        
+        content = response.choices[0].message.content
+        
+        return {
+            "question_id": question_id,
+            "question": question["question"],
+            "category": question["category"],
+            "model_answer": content,
+            "key_points": question.get('key_themes', []),
+            "persona_tailored": persona_id is not None
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Model answer generation failed: {str(e)}")
 
 @app.get("/progress")
 def get_progress():

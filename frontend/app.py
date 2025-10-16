@@ -52,6 +52,7 @@ with tab1:
                 st.rerun()
     
     if st.session_state.selected_persona:
+        # Change this?
         st.success(f"Selected: {next(p['name'] for p in personas if p['id'] == st.session_state.selected_persona)}")
         
         # Get persona details
@@ -76,10 +77,16 @@ with tab1:
             )
         
         with col2:
-            categories = requests.get(f"{API_BASE_URL}/categories").json()
+            if st.session_state.selected_persona:
+                categories_response = requests.get(
+                    f"{API_BASE_URL}/categories",
+                    params={"persona_id": st.session_state.selected_persona}
+                ).json()
+            else:
+                categories_response = requests.get(f"{API_BASE_URL}/categories").json()
             category = st.selectbox(
                 "Category",
-                ["All"] + list(categories.keys())
+                ["All"] + list(categories_response .keys())
             )
         
         # Get filtered questions
@@ -118,25 +125,32 @@ with tab1:
                 st.rerun()
         
         # Question Card
+        # Set up a story based on the selected persona and question
         if st.session_state.selected_question:
             q = st.session_state.selected_question
+            st.divider()
+            st.subheader("📖 Scenario Context")
+            
+            with st.spinner("Generating realistic scenario..."):
+                scenario = requests.get(
+                    f"{API_BASE_URL}/scenario/{q['id']}/{st.session_state.selected_persona}"
+                ).json()
+            
+            st.markdown(f"""
+            <div style="padding: 20px; background-color: #f0f2f6; border-radius: 10px; border-left: 5px solid #1f77b4;">
+                <p><strong>Category:</strong> {q['category']}</p>
+                <p><strong>Difficulty:</strong> {q['difficulty'].upper()}</p>
+                <p><strong>Context:</strong> {q['context']}</p>
+                <p><strong>Estimated Time:</strong> {q['estimated_response_time']} seconds</p>
+            </div>
+            <div style="padding: 15px; background-color: #e8f4f8; border-radius: 10px; border-left: 5px solid #2196F3;">
+                <p style="margin: 0; font-style: italic;">{scenario['scenario']}</p>
+                <p style="margin: 0; font-style: italic;">{q['question']}</p>
+            </div>
+            """, unsafe_allow_html=True)
             
             st.divider()
-            st.subheader("4. Your Practice Question")
-            
-            with st.container():
-                st.markdown(f"""
-                <div style="padding: 20px; background-color: #f0f2f6; border-radius: 10px; border-left: 5px solid #1f77b4;">
-                    <h3 style="margin-top: 0;">❓ {q['question']}</h3>
-                    <p><strong>Category:</strong> {q['category']}</p>
-                    <p><strong>Difficulty:</strong> {q['difficulty'].upper()}</p>
-                    <p><strong>Context:</strong> {q['context']}</p>
-                    <p><strong>Estimated Time:</strong> {q['estimated_response_time']} seconds</p>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            st.divider()
-            
+                    
             # Response Input
             st.subheader("5. Your Response")
             
@@ -146,7 +160,7 @@ with tab1:
                 height=200,
                 key="response_input"
             )
-            
+                
             if st.button("✅ Submit Response", type="primary"):
                 if user_response.strip():
                     # Evaluate response
@@ -266,6 +280,18 @@ with tab2:
 with tab3:
     st.header("📚 Model Answers")
     
+    # Add persona selector
+    personas = requests.get(f"{API_BASE_URL}/personas").json()
+    selected_persona_learn = st.selectbox(
+        "Select Persona (optional - for tailored answers)",
+        ["None"] + [p['name'] for p in personas],
+        key="learn_persona"
+    )
+    
+    persona_id_param = None
+    if selected_persona_learn != "None":
+        persona_id_param = next(p['id'] for p in personas if p['name'] == selected_persona_learn)
+    
     questions = requests.get(f"{API_BASE_URL}/questions").json()
     
     category_filter = st.selectbox(
@@ -278,17 +304,23 @@ with tab3:
     
     for q in questions:
         with st.expander(f"**{q['category']}** - {q['question']}"):
-            model_ans = requests.get(f"{API_BASE_URL}/model-answer/{q['id']}").json()
+            params = {"persona_id": persona_id_param} if persona_id_param else {}
+            
+            with st.spinner("Generating model answer..."):
+                model_ans = requests.get(
+                    f"{API_BASE_URL}/model-answer/{q['id']}", 
+                    params=params
+                ).json()
+            
+            if model_ans.get('persona_tailored'):
+                st.success("✨ Answer tailored for selected persona")
             
             st.write("**Model Answer:**")
             st.info(model_ans['model_answer'])
             
-            st.write("**Key Points to Cover:**")
+            st.write("**Key Themes to Cover:**")
             for point in model_ans['key_points']:
                 st.write(f"- {point}")
-            
-            st.write("**Reasoning:**")
-            st.write(model_ans['reasoning'])
 
 # TAB 4: SESSIONS
 with tab4:

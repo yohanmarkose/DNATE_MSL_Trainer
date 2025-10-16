@@ -1,0 +1,6 @@
+fastapi
+streamlit
+pydantic
+numpy
+dotenv
+openai
