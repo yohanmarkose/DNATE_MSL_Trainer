@@ -469,12 +469,6 @@ def render_learn_tab():
     """Render the Learn tab"""
     st.header("📚 Model Answers")
     
-    # Initialize cache in session state
-    if 'model_answers_cache' not in st.session_state:
-        st.session_state.model_answers_cache = {}
-    if 'learn_tab_initialized' not in st.session_state:
-        st.session_state.learn_tab_initialized = False
-    
     # Add persona selector
     personas = fetch_personas()
     selected_persona_learn = st.selectbox(
@@ -487,16 +481,9 @@ def render_learn_tab():
     if selected_persona_learn != "None":
         persona_id_param = next(p['id'] for p in personas if f"{p['name']} ({p['specialty']})" == selected_persona_learn)
     
-    # Clear cache when persona changes
-    if 'last_selected_persona' not in st.session_state:
-        st.session_state.last_selected_persona = None
-    
-    if st.session_state.last_selected_persona != persona_id_param:
-        st.session_state.model_answers_cache = {}
-        st.session_state.last_selected_persona = persona_id_param
-        st.session_state.learn_tab_initialized = False
-    
-    questions = fetch_questions(persona_id_param or personas[0]['id'] if personas else None)
+    # Get all questions for category filter
+    questions_list = requests.get(f"{API_BASE_URL}/questions").json()
+    categories = sorted(list(set(q['category'] for q in questions_list)))
     
     category_filter = st.selectbox(
         "Filter by Category",
@@ -508,54 +495,107 @@ def render_learn_tab():
     if persona_id_param:
         params["persona_id"] = persona_id_param
     if category_filter != "All":
-        filtered_questions = [q for q in questions if q['category'] == category_filter]
-    else:
-        filtered_questions = questions
+        params["category"] = category_filter
     
-    # Auto-generate answers on first load
-    if not st.session_state.learn_tab_initialized:
-        st.info("📚 Loading model answers for all questions...")
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        for idx, q in enumerate(questions):
-            cache_key = f"{q['id']}_{persona_id_param}"
-            
-            if cache_key not in st.session_state.model_answers_cache:
-                status_text.text(f"Generating answer {idx + 1}/{len(questions)}: {q['category']}")
-                model_ans = fetch_model_answer(q['id'], persona_id_param)
-                if model_ans:
-                    st.session_state.model_answers_cache[cache_key] = model_ans
-            
-            progress_bar.progress((idx + 1) / len(questions))
-        
-        progress_bar.empty()
-        status_text.empty()
-        st.session_state.learn_tab_initialized = True
-        st.success("✅ All model answers loaded!")
-    
-    # Show cache status
-    st.caption(f"📦 {len(st.session_state.model_answers_cache)} answers cached")
-    
-    # Display questions with cached answers
-    for q in filtered_questions:
-        cache_key = f"{q['id']}_{persona_id_param}"
-        
-        with st.expander(f"**{q['category']}** - {q['question']}"):
-            model_ans = st.session_state.model_answers_cache.get(cache_key)
-            
-            if model_ans:
-                if model_ans.get('persona_tailored'):
-                    st.success("✨ Answer tailored for selected persona")
+    if st.button("📖 Get Model Answers", type="primary"):
+        with st.spinner("Loading model answers..."):
+            try:
+                response = requests.get(
+                    f"{API_BASE_URL}/model-answers",
+                    params=params
+                )
                 
-                st.write("**Model Answer:**")
-                st.info(model_ans['model_answer'])
+                if response.status_code != 200:
+                    st.error(f"Error: Server returned status {response.status_code}")
+                    st.stop()
                 
-                st.write("**Key Themes to Cover:**")
-                for point in model_ans['key_points']:
-                    st.write(f"- {point}")
-            else:
-                st.warning("⚠️ Answer not available in cache")
+                data = response.json()
+                answers = data.get("answers", [])
+                
+                if not answers:
+                    st.warning("No model answers found for the selected filters.")
+                    if "message" in data:
+                        st.info(data["message"])
+                else:
+                    st.success(f"✅ Found {len(answers)} model answer(s)")
+                    
+                    # Group answers by question_id to prefer persona-specific over generic
+                    answers_by_question = {}
+                    for answer in answers:
+                        q_id = answer['question_id']
+                        # Prefer persona-tailored answers over generic
+                        if q_id not in answers_by_question or answer.get('persona_tailored'):
+                            answers_by_question[q_id] = answer
+                    
+                    # Display answers sorted by category
+                    sorted_answers = sorted(answers_by_question.values(), key=lambda x: (x['category'], x['question_id']))
+                    
+                    for answer in sorted_answers:
+                        with st.expander(f"**{answer['category']}** - {answer['question']}"):
+                            
+                            # Question Context Section
+                            st.markdown("### 📋 Question Context")
+                            
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("Difficulty", answer.get('difficulty', 'N/A').upper())
+                            with col2:
+                                st.metric("Estimated Time", f"{answer.get('estimated_response_time', 'N/A')}s")
+                            with col3:
+                                st.metric("Category", answer['category'])
+                            
+                            st.write("**Context:**")
+                            st.info(answer.get('context', 'No context provided'))
+                            
+                            st.divider()
+                            
+                            # Persona Details Section (if persona-tailored)
+                            if answer.get('persona_tailored'):
+                                st.markdown("### 👤 Physician Persona")
+                                st.success(f"✨ Answer tailored for **{answer.get('persona_name', 'Unknown')}**")
+                                
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.write("**Specialty:**", answer.get('persona_specialty', 'N/A'))
+                                    st.write("**Practice Setting:**", answer.get('persona_practice_setting', 'N/A'))
+                                with col2:
+                                    st.write("**Communication Style:**", answer.get('persona_communication_style', 'N/A'))
+                                
+                                if answer.get('persona_priorities'):
+                                    st.write("**Top Priorities:**")
+                                    for priority in answer['persona_priorities']:
+                                        st.write(f"• {priority}")
+                                
+                                st.divider()
+                            else:
+                                st.info("📝 Generic answer (not tailored to specific persona)")
+                                st.divider()
+                            
+                            # Model Answer Section
+                            st.markdown("### 💡 Model Answer")
+                            st.markdown(f"<div style='padding: 20px; background-color: #f0f2f6; border-radius: 10px; border-left: 5px solid #1f77b4;'>{answer['model_answer']}</div>", unsafe_allow_html=True)
+                            
+                            st.write("")
+                            
+                            # Key Points Section
+                            st.markdown("### ✅ Key Points to Cover")
+                            for idx, point in enumerate(answer['key_points'], 1):
+                                st.write(f"{idx}. {point}")
+                            
+                            st.write("")
+                            
+                            # Reasoning Section
+                            if answer.get('reasoning'):
+                                with st.expander("💡 Strategy & Reasoning"):
+                                    st.write(answer['reasoning'])
+            
+            except requests.exceptions.RequestException as e:
+                st.error(f"Connection error: {str(e)}")
+            except Exception as e:
+                st.error(f"Unexpected error: {str(e)}")
+                import traceback
+                with st.expander("Show error details"):
+                    st.code(traceback.format_exc())
 
 def render_sessions_tab():
     """Render the Sessions tab"""
