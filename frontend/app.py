@@ -332,6 +332,7 @@ with track:
     if progress.get('persona_stats'):
         render_persona_breakdown(progress['persona_stats'], personas)
 
+
 # TAB 3: LEARN
 with tab3:
     st.header("📚 Model Answers")
@@ -399,22 +400,61 @@ with tab3:
                     
                     for answer in sorted_answers:
                         with st.expander(f"**{answer['category']}** - {answer['question']}"):
-                            if answer.get('persona_tailored'):
-                                st.success(f"✨ Answer tailored for {answer.get('persona_name', 'selected persona')}")
-                            else:
-                                st.info("📝 Generic answer")
                             
-                            st.write("**Model Answer:**")
-                            st.markdown(f"<div style='padding: 15px; background-color: #f0f2f6; border-radius: 5px;'>{answer['model_answer']}</div>", unsafe_allow_html=True)
+                            # Question Context Section
+                            st.markdown("### 📋 Question Context")
+                            
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("Difficulty", answer.get('difficulty', 'N/A').upper())
+                            with col2:
+                                st.metric("Estimated Time", f"{answer.get('estimated_response_time', 'N/A')}s")
+                            with col3:
+                                st.metric("Category", answer['category'])
+                            
+                            st.write("**Context:**")
+                            st.info(answer.get('context', 'No context provided'))
+                            
+                            st.divider()
+                            
+                            # Persona Details Section (if persona-tailored)
+                            if answer.get('persona_tailored'):
+                                st.markdown("### 👤 Physician Persona")
+                                st.success(f"✨ Answer tailored for **{answer.get('persona_name', 'Unknown')}**")
+                                
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.write("**Specialty:**", answer.get('persona_specialty', 'N/A'))
+                                    st.write("**Practice Setting:**", answer.get('persona_practice_setting', 'N/A'))
+                                with col2:
+                                    st.write("**Communication Style:**", answer.get('persona_communication_style', 'N/A'))
+                                
+                                if answer.get('persona_priorities'):
+                                    st.write("**Top Priorities:**")
+                                    for priority in answer['persona_priorities']:
+                                        st.write(f"• {priority}")
+                                
+                                st.divider()
+                            else:
+                                st.info("📝 Generic answer (not tailored to specific persona)")
+                                st.divider()
+                            
+                            # Model Answer Section
+                            st.markdown("### 💡 Model Answer")
+                            st.markdown(f"<div style='padding: 20px; background-color: #f0f2f6; border-radius: 10px; border-left: 5px solid #1f77b4;'>{answer['model_answer']}</div>", unsafe_allow_html=True)
                             
                             st.write("")
-                            st.write("**Key Points to Cover:**")
-                            for point in answer['key_points']:
-                                st.write(f"✓ {point}")
                             
+                            # Key Points Section
+                            st.markdown("### ✅ Key Points to Cover")
+                            for idx, point in enumerate(answer['key_points'], 1):
+                                st.write(f"{idx}. {point}")
+                            
+                            st.write("")
+                            
+                            # Reasoning Section
                             if answer.get('reasoning'):
-                                st.write("")
-                                with st.expander("💡 Reasoning & Strategy"):
+                                with st.expander("💡 Strategy & Reasoning"):
                                     st.write(answer['reasoning'])
             
             except requests.exceptions.RequestException as e:
@@ -425,6 +465,7 @@ with tab3:
                 with st.expander("Show error details"):
                     st.code(traceback.format_exc())
 
+                    
 # TAB 4: SESSIONS
 with tab4:
     st.header("💬 Your Practice Sessions")

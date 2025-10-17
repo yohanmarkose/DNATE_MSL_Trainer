@@ -4,10 +4,23 @@ from openai import OpenAI
 import json
 from typing import Optional
 from datetime import datetime
-
+from services.s3 import S3FileManager  # Updated import path
 
 load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+# Load environment variables
+AWS_BUCKET_NAME = os.getenv("AWS_BUCKET_NAME")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+# Validate environment variables
+if not AWS_BUCKET_NAME:
+    raise ValueError("AWS_BUCKET_NAME environment variable is not set!")
+if not OPENAI_API_KEY:
+    raise ValueError("OPENAI_API_KEY environment variable is not set!")
+
+print(f"Using bucket: {AWS_BUCKET_NAME}")  # Debug print
+
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 MODEL_ANSWERS_FILE = "model_answers.json"
 
@@ -18,27 +31,95 @@ with open('questions.json', 'r') as f:
 with open('personas.json', 'r') as f:
     personas_data = json.load(f)
 
-# Load or initialize model answers
+# S3 configuration
+DOCUMENTS_KEY = "model_answers.json"
+BASE_PATH = "model_answer"
+
+# Initialize S3 manager
+s3_manager = S3FileManager(AWS_BUCKET_NAME, BASE_PATH)
+
+
+def save_to_s3(save_data, key=DOCUMENTS_KEY):
+    """Save model answers to S3"""
+    try:
+        # Validate input
+        if save_data is None:
+            raise ValueError("save_data is None")
+        
+        # Convert dict to JSON string
+        json_string = json.dumps(save_data, indent=2)
+        
+        # Construct full S3 key path
+        full_key = f"{BASE_PATH}/{key}"
+        
+        print(f"Uploading to S3: s3://{AWS_BUCKET_NAME}/{full_key}")
+        
+        # Upload to S3
+        s3_manager.upload_file(
+            bucket_name=AWS_BUCKET_NAME,
+            file_name=full_key,
+            content=json_string
+        )
+        print(f"✅ Saved to S3: s3://{AWS_BUCKET_NAME}/{full_key}")
+    except Exception as e:
+        print(f"❌ Error saving to S3: {str(e)}")
+        import traceback
+        traceback.print_exc()
+
+def load_from_s3(key=DOCUMENTS_KEY):
+    """Load model answers from S3"""
+    try:
+        # Construct full S3 key path
+        full_key = f"{BASE_PATH}/{key}"
+        
+        # Load from S3
+        json_content = s3_manager.load_s3_file_content(full_key)
+        
+        # Parse JSON string to dict
+        data = json.loads(json_content)
+        print(f"✅ Loaded from S3: s3://{AWS_BUCKET_NAME}/{full_key}")
+        return data
+    except Exception as e:
+        print(f"❌ Error loading from S3: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return {"answers": {}}
+
+
 def load_model_answers():
-    if os.path.exists(MODEL_ANSWERS_FILE):
-        with open(MODEL_ANSWERS_FILE, 'r') as f:
-            return json.load(f)
-    return {"answers": {}}
+    """Load model answers from local file or S3"""
+    # Try local file first
+    # if os.path.exists(MODEL_ANSWERS_FILE):
+    #     with open(MODEL_ANSWERS_FILE, 'r') as f:
+    #         return json.load(f)
+    
+    # If local doesn't exist, try S3
+    print("load from S3...")
+    return load_from_s3()
+
 
 def save_model_answers(data):
+    """Save model answers to both local file and S3"""
+    # Save locally
     with open(MODEL_ANSWERS_FILE, 'w') as f:
         json.dump(data, f, indent=2)
+    print(f"✅ Saved locally to {MODEL_ANSWERS_FILE}")
+    
+    # Save to S3
+    save_to_s3(data)
 
+
+# Load existing model answers
 model_answers_data = load_model_answers()
 
-# Helper to create cache key
+
 def get_answer_key(question_id: int, persona_id: Optional[str] = None):
     """Create a unique key for caching"""
     if persona_id:
         return f"q{question_id}_{persona_id}"
     return f"q{question_id}_generic"
 
-# FUNCTION: Generate all model answers
+
 def generate_all_model_answers():
     """
     Run this function once to generate all model answers.
@@ -115,8 +196,12 @@ REASONING:
             generated_answers[answer_key] = {
                 "question_id": question_id,
                 "persona_id": None,
+                "persona_name": None,
                 "question": question["question"],
                 "category": question["category"],
+                "difficulty": question.get("difficulty", "medium"),
+                "context": question["context"],
+                "estimated_response_time": question.get("estimated_response_time", 60),
                 "model_answer": model_answer,
                 "key_points": key_points if key_points else question.get('key_themes', []),
                 "reasoning": reasoning,
@@ -206,8 +291,15 @@ REASONING:
                         "question_id": question_id,
                         "persona_id": persona_id,
                         "persona_name": persona['name'],
+                        "persona_specialty": persona['specialty'],
+                        "persona_practice_setting": persona['practice_setting']['type'],
+                        "persona_communication_style": persona['communication_style']['tone'],
+                        "persona_priorities": persona['priorities'][:3],
                         "question": question["question"],
                         "category": question["category"],
+                        "difficulty": question.get("difficulty", "medium"),
+                        "context": question["context"],
+                        "estimated_response_time": question.get("estimated_response_time", 60),
                         "model_answer": model_answer,
                         "key_points": key_points if key_points else question.get('key_themes', []),
                         "reasoning": reasoning,
@@ -220,7 +312,7 @@ REASONING:
                 except Exception as e:
                     print(f"✗ Error generating answer for Q{question_id} + {persona_id}: {str(e)}")
     
-    # Save all answers to file
+    # Save all answers to file and S3
     save_data = {
         "answers": generated_answers,
         "metadata": {
@@ -230,10 +322,11 @@ REASONING:
     }
     
     save_model_answers(save_data)
+    
     print(f"\n✅ Complete! Generated {len(generated_answers)} model answers")
-    print(f"Saved to {MODEL_ANSWERS_FILE}")
     
     return generated_answers
+
 
 if __name__ == "__main__":
     generate_all_model_answers()
