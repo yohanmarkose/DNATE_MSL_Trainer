@@ -1,13 +1,30 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends, Header, Security
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
 from typing import List, Optional
 import json
 from datetime import datetime
 import uuid
+from bson import ObjectId
 from dotenv import load_dotenv
 import os
+from copy import deepcopy
 from openai import OpenAI
+from services.database import (
+    users_collection, 
+    sessions_collection,
+    personas_collections,
+    questions_collections,
+    category_collections,
+    user_progress_collections
+)
+from services.models import UserSignup, UserLogin, TokenResponse
+from services.auth import hash_password, verify_password, create_access_token, decode_access_token, generate_session_id
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
+security = HTTPBearer()
+
 
 from features.gamification import (
     calculate_level,
@@ -83,25 +100,188 @@ class EvaluationResponse(BaseModel):
     engagement_points_covered: List[str]
     missing_points: List[str]
 
+
+def convert_objectid(obj):
+    """
+    Recursively converts ObjectId in dict or list to string
+    """
+    if isinstance(obj, list):
+        return [convert_objectid(item) for item in obj]
+    elif isinstance(obj, dict):
+        return {k: convert_objectid(v) for k, v in obj.items()}
+    elif isinstance(obj, ObjectId):
+        return str(obj)
+    else:
+        return obj
+    
+# Function to convert list of objs to dict
+def format_category(category):
+    merged_dict = {k: v for d in category for k, v in d.items()}
+    return merged_dict
+
+@app.get("/protected")
+async def protected_route(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    return {"token": credentials.credentials}
+
+# ------------------------------------------------
+# Helper: Get current user from Authorization token
+# ------------------------------------------------
+# async def get_current_user(authorization: str = Header(None)):
+#     print(f'auth : {authorization}')
+#     if not authorization or not authorization.startswith("Bearer "):
+#         raise HTTPException(status_code=401, detail="Invalid authorization header")
+#     token = authorization.split(" ")[1]
+#     payload = decode_access_token(token)
+#     if not payload:
+#         raise HTTPException(status_code=401, detail="Invalid or expired token")
+#     user = await users_collection.find_one({"_id": payload["user_id"]})
+#     if not user:
+#         raise HTTPException(status_code=404, detail="User not found")
+#     return user
+
+async def get_current_user(Authorization: str = Header(None)):
+    """
+    Extract and validate user from JWT token in the Authorization header.
+    """
+    if not Authorization or not Authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authorization header")
+
+    token = Authorization.split(" ")[1]
+    payload = decode_access_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    user = await users_collection.find_one({"_id": payload["user_id"]})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Optionally attach session_id if available
+    user["session_id"] = payload.get("session_id")
+    return user
+
+# ------------------------------------------------
+# SIGNUP ENDPOINT
+# ------------------------------------------------
+@app.post("/signup", response_model=TokenResponse)
+async def signup(user: UserSignup):
+    existing_user = await users_collection.find_one({"email": user.email})
+    if existing_user:
+        raise HTTPException(status_code=400, detail="User already exists")
+
+    hashed_pw = hash_password(user.password)
+    new_user = {
+        "email": user.email,
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+        "password_hash": hashed_pw,
+        "created_at": datetime.utcnow(),
+        "last_login": None,
+        
+    }
+    result = await users_collection.insert_one(new_user)
+    user_id = str(result.inserted_id)
+
+    progress_doc = deepcopy(user_progress)
+    progress_doc.update({
+        "user_id": user_id,
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow()
+    })
+    await user_progress_collections.insert_one(progress_doc)
+
+    # Create session
+    session_id = generate_session_id()
+    await sessions_collection.insert_one({
+        "user_id": user_id,
+        "session_id": session_id,
+        "login_time": datetime.utcnow(),
+        "active": True
+    })
+
+    token = create_access_token({"user_id": user_id, "session_id": session_id})
+    return {"access_token": token}
+
+# ------------------------------------------------
+# LOGIN ENDPOINT
+# ------------------------------------------------
+@app.post("/login", response_model=TokenResponse)
+async def login(user: UserLogin):
+    existing_user = await users_collection.find_one({"email": user.email})
+    if not existing_user or not verify_password(user.password, existing_user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    session_id = generate_session_id()
+    await sessions_collection.insert_one({
+        "user_id": str(existing_user["_id"]),
+        "session_id": session_id,
+        "login_time": datetime.utcnow(),
+        "active": True
+    })
+
+    await users_collection.update_one(
+        {"_id": existing_user["_id"]},
+        {"$set": {"last_login": datetime.utcnow()}}
+    )
+
+    token = create_access_token({"user_id": str(existing_user["_id"]), "session_id": session_id})
+    return {"access_token": token}
+
+# ------------------------------------------------
+# LOGOUT ENDPOINT
+# ------------------------------------------------
+@app.post("/logout")
+async def logout(
+    credentials: HTTPAuthorizationCredentials = Security(security),
+):
+    token = credentials.credentials
+    payload = decode_access_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    
+    session_id = payload.get("session_id")
+    print(f"session id : {session_id}")
+
+    if session_id:
+        await sessions_collection.update_one(
+            {"session_id": session_id},
+            {"$set": {"active": False, "logout_time": datetime.utcnow()}}
+        )
+
+    return {"message": "Logged out successfully"}
+# ------------------------------------------------
+# PROTECTED USER DATA ENDPOINT (DATA ISOLATION)
+# ------------------------------------------------
+# @app.get("/user/me")
+# async def get_user_profile(current_user=Depends(get_current_user)):
+#     # Always isolate queries to current user
+#     user = await users_collection.find_one({"_id": current_user["_id"]}, {"password_hash": 0})
+#     return user
+
 @app.get("/personas")
-def get_personas():
-    return personas_data["personas"]
+async def get_personas():
+    personas = await personas_collections.find({}).to_list(length=None)
+    personas = convert_objectid(personas)
+    return personas
 
 @app.get("/personas/{persona_id}")
-def get_persona(persona_id: str):
-    persona = next((p for p in personas_data["personas"] if p["id"] == persona_id), None)
+async def get_persona(persona_id: str):
+    personas = await personas_collections.find({}).to_list(length=None)
+    personas = convert_objectid(personas)
+    persona = next((p for p in personas if p["id"] == persona_id), None)
     if not persona:
         raise HTTPException(status_code=404, detail="Persona not found")
     return persona
 
 @app.get("/questions")
-def get_questions(
+async def get_questions(
     persona_id: Optional[str] = None,
     difficulty: Optional[str] = None,
     category: Optional[str] = None
 ):
-    questions = questions_data["questions"]
-    
+    # questions = questions_data["questions"]
+    questions = await questions_collections.find({}).to_list(length=None)
+    questions = convert_objectid(questions)
+
     if persona_id:
         questions = [q for q in questions if persona_id in q.get("persona", [])]
     
@@ -110,27 +290,32 @@ def get_questions(
     
     if category:
         questions = [q for q in questions if q.get("category") == category]
-    
     return questions
 
 @app.get("/categories")
-def get_categories(persona_id: Optional[str] = None):
+async def get_categories(persona_id: Optional[str] = None):
     """Get categories, optionally filtered by persona"""
+    questions = await questions_collections.find({}).to_list(length=None)
+    questions = convert_objectid(questions)
+
+    category = await category_collections.find({}).to_list(length=None)
+    category = convert_objectid(category)
     
     if not persona_id:
-        return questions_data["categories"]
+        return category
     
     persona_questions = [
-        q for q in questions_data["questions"] 
+        q for q in questions 
         if persona_id in q.get("persona", [])
     ]
 
     available_categories = set(q["category"] for q in persona_questions)
     
     # Filter the categories dict to only include available ones
+    category = format_category(category)
     filtered_categories = {
         cat_name: cat_info 
-        for cat_name, cat_info in questions_data["categories"].items()
+        for cat_name, cat_info in category.items()
         if cat_name in available_categories
     }
     
@@ -141,9 +326,15 @@ def get_categories(persona_id: Optional[str] = None):
     return filtered_categories
 
 @app.get("/scenario/{question_id}/{persona_id}")
-def get_scenario(question_id: int, persona_id: str):
-    question = next((q for q in questions_data["questions"] if q["id"] == question_id), None)
-    persona = next((p for p in personas_data["personas"] if p["id"] == persona_id), None)
+async def get_scenario(question_id: int, persona_id: str):
+    questions = await questions_collections.find({}).to_list(length=None)
+    questions = convert_objectid(questions)
+
+    personas = await personas_collections.find({}).to_list(length=None)
+    personas = convert_objectid(personas)
+
+    question = next((q for q in questions if q["id"] == question_id), None)
+    persona = next((p for p in personas if p["id"] == persona_id), None)
     
     if not question or not persona:
         raise HTTPException(status_code=404, detail="Question or Persona not found")
@@ -188,9 +379,24 @@ Make it realistic and immersive."""
         raise HTTPException(status_code=500, detail=f"Scenario generation failed: {str(e)}")
 
 @app.post("/evaluate", response_model=EvaluationResponse)
-def evaluate_response(session: SessionRequest):
-    question = next((q for q in questions_data["questions"] if q["id"] == session.question_id), None)
-    persona = next((p for p in personas_data["personas"] if p["id"] == session.persona_id), None)
+async def evaluate_response(session: SessionRequest, credentials: HTTPAuthorizationCredentials = Depends(security)):
+    token = credentials.credentials
+    payload = decode_access_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    user_id = payload["user_id"]
+    session_id = payload["session_id"]
+
+    print(f"payload: {payload}")
+
+    questions = await questions_collections.find({}).to_list(length=None)
+    questions = convert_objectid(questions)
+
+    personas = await personas_collections.find({}).to_list(length=None)
+    personas = convert_objectid(personas)
+
+    question = next((q for q in questions if q["id"] == session.question_id), None)
+    persona = next((p for p in personas if p["id"] == session.persona_id), None)
     
     if not question or not persona:
         raise HTTPException(status_code=404, detail="Question or Persona not found")
@@ -247,19 +453,40 @@ Respond in this JSON format:
         result = json.loads(response.choices[0].message.content)
         
         # Store session
-        session_id = str(uuid.uuid4())
-        sessions_store[session_id] = {
-            "id": session_id,
+        # session_id = str(uuid.uuid4())
+        # sessions_store[session_id] = {
+        #     "id": session_id,
+        #     "question_id": session.question_id,
+        #     "persona_id": session.persona_id,
+        #     "user_response": session.user_response,
+        #     "score": result["score"],
+        #     "timestamp": datetime.now().isoformat(),
+        #     "category": question["category"]
+        # }
+
+        interaction = {
             "question_id": session.question_id,
             "persona_id": session.persona_id,
             "user_response": session.user_response,
             "score": result["score"],
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.utcnow().isoformat(),
             "category": question["category"]
         }
+
+        result = await sessions_collection.update_one(
+            {"session_id": session_id},          # Find the correct session
+            {"$push": {"interactions": interaction}}  # Append interaction
+        )
+
+        if result.matched_count == 0:
+            # Optional: handle session not found
+            raise Exception(f"Session {session_id} not found.")
+
         
         # Update progress
-        update_progress(question["category"], session.persona_id, result["score"])
+        await update_progress(user_id, question["category"], session.persona_id, result["score"])
+
+        # update user_progress in db
         
         return EvaluationResponse(
             score=result["score"],
@@ -273,15 +500,21 @@ Respond in this JSON format:
         raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
 
 @app.get("/model-answer/{question_id}")
-def get_model_answer(question_id: int, persona_id: Optional[str] = None):
-    question = next((q for q in questions_data["questions"] if q["id"] == question_id), None)
+async def get_model_answer(question_id: int, persona_id: Optional[str] = None):
+    questions = await questions_collections.find({}).to_list(length=None)
+    questions = convert_objectid(questions)
+
+    personas = await personas_collections.find({}).to_list(length=None)
+    personas = convert_objectid(personas)
+
+    question = next((q for q in questions if q["id"] == question_id), None)
     if not question:
         raise HTTPException(status_code=404, detail="Question not found")
     
     # Get persona if provided
     persona = None
     if persona_id:
-        persona = next((p for p in personas_data["personas"] if p["id"] == persona_id), None)
+        persona = next((p for p in personas if p["id"] == persona_id), None)
     
     model_prompt = f"""Create a model answer for an MSL responding to this physician question.
 
@@ -336,12 +569,40 @@ Also provide:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Model answer generation failed: {str(e)}")
 
-@app.get("/progress")
-def get_progress():
-    return user_progress
+# @app.get("/progress")
+# async def get_progress():
+#     user_progress_data = await user_progress_collections.find({}).to_list(length=None)
+#     user_progress_data = convert_objectid(user_progress_data)
+#     return user_progress_data
 
+@app.get("/progress")
+async def get_progress(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    token = credentials.credentials
+    payload = decode_access_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    user_id = payload["user_id"]
+
+    user_progress_data = await user_progress_collections.find_one({"user_id": user_id})
+    if not user_progress_data:
+        raise HTTPException(status_code=404, detail="User progress not found")
+    print(user_progress_data)
+    user_progress_data = convert_objectid(user_progress_data)
+    return user_progress_data
+
+# Work in progress
 @app.get("/sessions")
-def get_sessions():
+async def get_sessions(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    token = credentials.credentials
+    payload = decode_access_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    user_id = payload["user_id"]
+    user_sessions = await sessions_collection.find({"user_id": user_id}).to_list(length=None)
+    if not user_sessions:
+        return {"message": "No sessions found for this user."}
+
+    user_sessions = convert_objectid(user_sessions)
     return list(sessions_store.values())
 
 @app.get("/progress/detailed")
@@ -416,51 +677,124 @@ def get_practice_heatmap():
     
     return heatmap_data
 
-def update_progress(category: str, persona_id: str, score: float, response_time_seconds: int = 90):
-    """Enhanced progress update with gamification"""
-    user_progress["total_sessions"] += 1
+# def update_progress(category: str, persona_id: str, score: float, response_time_seconds: int = 90):
+#     """Enhanced progress update with gamification"""
+#     user_progress["total_sessions"] += 1
     
+#     # Update category stats
+#     if category not in user_progress["category_stats"]:
+#         user_progress["category_stats"][category] = {"count": 0, "avg_score": 0, "total_score": 0}
+    
+#     cat_stats = user_progress["category_stats"][category]
+#     cat_stats["count"] += 1
+#     cat_stats["total_score"] += score
+#     cat_stats["avg_score"] = cat_stats["total_score"] / cat_stats["count"]
+    
+#     # Update persona stats
+#     if persona_id not in user_progress["persona_stats"]:
+#         user_progress["persona_stats"][persona_id] = {"count": 0, "avg_score": 0, "total_score": 0}
+    
+#     pers_stats = user_progress["persona_stats"][persona_id]
+#     pers_stats["count"] += 1
+#     pers_stats["total_score"] += score
+#     pers_stats["avg_score"] = pers_stats["total_score"] / pers_stats["count"]
+    
+#     # Update overall average
+#     user_progress["scores_history"].append(score)
+#     user_progress["score_timestamps"].append(datetime.now().isoformat())
+#     user_progress["average_score"] = sum(user_progress["scores_history"]) / len(user_progress["scores_history"])
+    
+#     # NEW: Track practice dates
+#     today = datetime.now().date().isoformat()
+#     if today not in user_progress["practice_dates"]:
+#         user_progress["practice_dates"].append(today)
+    
+#     # NEW: Update practice time
+#     user_progress["total_practice_time_minutes"] += response_time_seconds / 60
+    
+#     # NEW: Calculate streaks
+#     current_streak, longest_streak = calculate_streak(user_progress["practice_dates"])
+#     user_progress["current_streak_days"] = current_streak
+#     user_progress["longest_streak_days"] = max(longest_streak, user_progress["longest_streak_days"])
+#     user_progress["last_practice_date"] = datetime.now().isoformat()
+    
+#     # NEW: Check and award milestones
+#     newly_achieved = check_and_award_milestones(user_progress)
+    
+#     return newly_achieved
+
+async def update_progress(user_id: str, category: str, persona_id: str, score: float, response_time_seconds: int = 90):
+    """Update user progress in MongoDB with gamification features."""
+    
+    # Fetch user progress from DB
+    user_progress_data = await user_progress_collections.find_one({"user_id": user_id})
+
+    if not user_progress_data:
+        raise HTTPException(status_code=404, detail="User progress not found")
+
+    # Make a modifiable copy
+    user_progress_data = deepcopy(user_progress_data)
+
+    # Update total sessions
+    user_progress_data["total_sessions"] = user_progress_data.get("total_sessions", 0) + 1
+
     # Update category stats
-    if category not in user_progress["category_stats"]:
-        user_progress["category_stats"][category] = {"count": 0, "avg_score": 0, "total_score": 0}
-    
-    cat_stats = user_progress["category_stats"][category]
+    category_stats = user_progress_data.get("category_stats", {})
+    if category not in category_stats:
+        category_stats[category] = {"count": 0, "avg_score": 0, "total_score": 0}
+    cat_stats = category_stats[category]
     cat_stats["count"] += 1
     cat_stats["total_score"] += score
     cat_stats["avg_score"] = cat_stats["total_score"] / cat_stats["count"]
-    
+    user_progress_data["category_stats"] = category_stats
+
     # Update persona stats
-    if persona_id not in user_progress["persona_stats"]:
-        user_progress["persona_stats"][persona_id] = {"count": 0, "avg_score": 0, "total_score": 0}
-    
-    pers_stats = user_progress["persona_stats"][persona_id]
+    persona_stats = user_progress_data.get("persona_stats", {})
+    if persona_id not in persona_stats:
+        persona_stats[persona_id] = {"count": 0, "avg_score": 0, "total_score": 0}
+    pers_stats = persona_stats[persona_id]
     pers_stats["count"] += 1
     pers_stats["total_score"] += score
     pers_stats["avg_score"] = pers_stats["total_score"] / pers_stats["count"]
-    
-    # Update overall average
-    user_progress["scores_history"].append(score)
-    user_progress["score_timestamps"].append(datetime.now().isoformat())
-    user_progress["average_score"] = sum(user_progress["scores_history"]) / len(user_progress["scores_history"])
-    
-    # NEW: Track practice dates
-    today = datetime.now().date().isoformat()
-    if today not in user_progress["practice_dates"]:
-        user_progress["practice_dates"].append(today)
-    
-    # NEW: Update practice time
-    user_progress["total_practice_time_minutes"] += response_time_seconds / 60
-    
-    # NEW: Calculate streaks
-    current_streak, longest_streak = calculate_streak(user_progress["practice_dates"])
-    user_progress["current_streak_days"] = current_streak
-    user_progress["longest_streak_days"] = max(longest_streak, user_progress["longest_streak_days"])
-    user_progress["last_practice_date"] = datetime.now().isoformat()
-    
-    # NEW: Check and award milestones
-    newly_achieved = check_and_award_milestones(user_progress)
-    
+    user_progress_data["persona_stats"] = persona_stats
+
+    # Update score history and average
+    user_progress_data.setdefault("scores_history", []).append(score)
+    user_progress_data.setdefault("score_timestamps", []).append(datetime.utcnow().isoformat())
+    user_progress_data["average_score"] = sum(user_progress_data["scores_history"]) / len(user_progress_data["scores_history"])
+
+    # Update practice dates and total time
+    today = datetime.utcnow().date().isoformat()
+    practice_dates = set(user_progress_data.get("practice_dates", []))
+    practice_dates.add(today)
+    user_progress_data["practice_dates"] = list(practice_dates)
+    user_progress_data["total_practice_time_minutes"] = user_progress_data.get("total_practice_time_minutes", 0) + (response_time_seconds / 60)
+
+    # Calculate streaks
+    current_streak, longest_streak = calculate_streak(user_progress_data["practice_dates"])
+    user_progress_data["current_streak_days"] = current_streak
+    user_progress_data["longest_streak_days"] = max(longest_streak, user_progress_data.get("longest_streak_days", 0))
+    user_progress_data["last_practice_date"] = datetime.utcnow().isoformat()
+
+    # Award milestones and achievements
+    newly_achieved = check_and_award_milestones(user_progress_data)
+    if newly_achieved:
+        user_progress_data["milestones_achieved"].extend(newly_achieved)
+
+    # Update last modified timestamp
+    user_progress_data["updated_at"] = datetime.utcnow()
+
+    print(f"user prgress : {user_progress_data}")
+
+    # Save back to DB
+    await user_progress_collections.update_one(
+        {"user_id": user_id},
+        {"$set": user_progress_data},
+        upsert=True
+    )
+
     return newly_achieved
+
 
 def generate_model_answer(question):
     # Template for model answers based on category
