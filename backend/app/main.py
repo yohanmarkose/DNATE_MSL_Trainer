@@ -575,7 +575,7 @@ async def get_milestones(credentials: HTTPAuthorizationCredentials = Depends(sec
 
     user_progress_data = convert_objectid(user_progress_data)
     milestones_list = get_all_milestones_with_status(user_progress_data["milestones_achieved"])
-    
+
     return {
         "milestones": milestones_list,
         "total_achieved": len(user_progress_data["milestones_achieved"]),

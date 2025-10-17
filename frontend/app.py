@@ -3,6 +3,113 @@ import requests
 import random
 from datetime import datetime
 from typing import List, Dict, Any, Optional
+# from utils.home import show_home
+
+
+# Add this at the top of your main file, after imports
+def render_auth_page():
+    """Render login/signup page"""
+    st.title("🏋️ DNATE MSL Practice Gym")
+    
+    tab1, tab2 = st.tabs(["Login", "Sign Up"])
+    
+    with tab1:
+        render_login()
+    
+    with tab2:
+        render_signup()
+
+def render_login():
+    """Render login form"""
+    st.subheader("Welcome Back!")
+    
+    with st.form("login_form"):
+        email = st.text_input("Email", placeholder="your.email@example.com")
+        password = st.text_input("Password", type="password")
+        submit = st.form_submit_button("Login", type="primary", use_container_width=True)
+        
+        if submit:
+            if not email or not password:
+                st.error("Please fill in all fields")
+            else:
+                with st.spinner("Logging in..."):
+                    try:
+                        response = requests.post(
+                            f"{API_BASE_URL}/login",
+                            json={"email": email, "password": password}
+                        )
+                        
+                        if response.status_code == 200:
+                            data = response.json()
+                            st.session_state.token = data["access_token"]
+                            st.session_state.username = email
+                            st.success("Login successful!")
+                            st.rerun()
+                        else:
+                            st.error("Invalid credentials")
+                    except Exception as e:
+                        st.error(f"Login failed: {str(e)}")
+
+def render_signup():
+    """Render signup form"""
+    st.subheader("Create Your Account")
+    
+    with st.form("signup_form"):
+        first_name = st.text_input("First Name")
+        last_name = st.text_input("Last Name")
+        email = st.text_input("Email", placeholder="your.email@example.com")
+        password = st.text_input("Password", type="password")
+        password_confirm = st.text_input("Confirm Password", type="password")
+        submit = st.form_submit_button("Sign Up", type="primary", use_container_width=True)
+        
+        if submit:
+            if not all([first_name, last_name, email, password, password_confirm]):
+                st.error("Please fill in all fields")
+            elif password != password_confirm:
+                st.error("Passwords don't match")
+            elif len(password) < 8:
+                st.error("Password must be at least 8 characters")
+            else:
+                with st.spinner("Creating account..."):
+                    try:
+                        response = requests.post(
+                            f"{API_BASE_URL}/signup",
+                            json={
+                                "first_name": first_name,
+                                "last_name": last_name,
+                                "email": email,
+                                "password": password
+                            }
+                        )
+                        
+                        if response.status_code == 200:
+                            data = response.json()
+                            st.session_state.token = data["access_token"]
+                            st.session_state.username = email
+                            st.success("Account created successfully!")
+                            st.rerun()
+                        else:
+                            error_detail = response.json().get("detail", "Signup failed")
+                            st.error(error_detail)
+                    except Exception as e:
+                        st.error(f"Signup failed: {str(e)}")
+
+def render_logout_button():
+    """Render logout button in sidebar"""
+    if st.sidebar.button("🚪 Logout", use_container_width=True):
+        with st.spinner("Logging out..."):
+            try:
+                headers = {"Authorization": f"Bearer {st.session_state.token}"}
+                requests.post(f"{API_BASE_URL}/logout", headers=headers)
+            except:
+                pass  # Logout locally even if API call fails
+            
+            st.session_state.token = None
+            st.session_state.username = None
+            st.rerun()
+
+
+#--------#
 
 from components.track_dashboard import (
     inject_custom_css,
@@ -20,6 +127,20 @@ from components.track_dashboard import (
 
 API_BASE_URL = "http://localhost:8000"
 
+
+st.set_page_config(
+    page_title="Chronic Disease Management",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# ========== SESSION STATE INIT ==========
+if "token" not in st.session_state:
+    st.session_state.token = None
+    st.session_state.username = None
+
+if "nav_selection" not in st.session_state and st.session_state.token is not None:
+    st.session_state.nav_selection = "Home"
 
 # ============= SESSION STATE INITIALIZATION =============
 
@@ -112,7 +233,17 @@ def submit_evaluation(question_id: int, persona_id: str, user_response: str) -> 
             "persona_id": persona_id,
             "user_response": user_response
         }
-        response = requests.post(f"{API_BASE_URL}/evaluate", json=payload)
+        response = requests.post(
+            f"{API_BASE_URL}/evaluate",
+            json=payload,
+            headers=get_auth_headers()
+        )
+        
+        if response.status_code == 401:
+            st.error("Session expired. Please login again.")
+            st.session_state.token = None
+            st.rerun()
+            
         return response.json()
     except Exception as e:
         st.error(f"Failed to evaluate response: {e}")
@@ -133,7 +264,10 @@ def fetch_model_answer(question_id: int, persona_id: Optional[str] = None) -> Op
 def fetch_sessions() -> List[Dict[str, Any]]:
     """Fetch all practice sessions"""
     try:
-        response = requests.get(f"{API_BASE_URL}/sessions")
+        response = requests.get(
+            f"{API_BASE_URL}/sessions",
+            headers=get_auth_headers()
+        )
         return response.json()
     except Exception as e:
         st.error(f"Failed to fetch sessions: {e}")
@@ -213,30 +347,40 @@ def render_question_selection(persona_id: str, difficulty: str, category: str) -
     
     col1, col2 = st.columns([3, 1])
     
-    with col1:
-        selected_q = st.selectbox(
-            "Choose a question",
-            questions,
-            format_func=lambda q: f"{q['category']} - {q['question'][:80]}..."
-        )
-        if selected_q != st.session_state.selected_question:
-            st.session_state.current_scenario = None  # NEW: Clear cached scenario
-            st.session_state.selected_question = None
-            st.session_state.evaluation_result = None
-            st.session_state.user_response = ""
-    
     with col2:
+        # Put random button FIRST, before selectbox
         if st.button("🎲 Random Question"):
             selected_q = random.choice(questions)
             st.session_state.selected_question = selected_q
-            st.session_state.current_scenario = None  # NEW: Clear cached scenario
+            st.session_state.current_scenario = None
+            st.session_state.evaluation_result = None
+            st.session_state.user_response = ""
             st.rerun()
     
+    with col1:
+        # Find index of currently selected question for selectbox
+        default_index = 0
+        if st.session_state.selected_question:
+            try:
+                default_index = next(
+                    i for i, q in enumerate(questions) 
+                    if q['id'] == st.session_state.selected_question['id']
+                )
+            except StopIteration:
+                default_index = 0
+        
+        selected_q = st.selectbox(
+            "Choose a question",
+            questions,
+            index=default_index,
+            format_func=lambda q: f"{q['category']} - {q['question'][:80]}..."
+        )
+    
     if st.button("Select This Question"):
-        st.session_state.user_response = None
         st.session_state.selected_question = selected_q
-        st.session_state.current_scenario = None  # NEW: Clear cached scenario
+        st.session_state.current_scenario = None
         st.session_state.evaluation_result = None
+        st.session_state.user_response = ""
         st.rerun()
     
     return selected_q
@@ -396,18 +540,36 @@ def render_track_tab():
     
     st.header("📊 Progress Dashboard")
     
-    # Fetch all required data
+    # Fetch all required data with authentication
     try:
-        progress = requests.get(f"{API_BASE_URL}/progress/detailed").json()
-        milestones_data = requests.get(f"{API_BASE_URL}/progress/milestones").json()
-        timeline = requests.get(f"{API_BASE_URL}/progress/timeline").json()
-        heatmap_data = requests.get(f"{API_BASE_URL}/progress/heatmap").json()
+        headers = get_auth_headers()
+        
+        progress = requests.get(
+            f"{API_BASE_URL}/progress/detailed",
+            headers=headers
+        ).json()
+        
+        milestones_data = requests.get(
+            f"{API_BASE_URL}/progress/milestones",
+            headers=headers
+        ).json()
+        
+        timeline = requests.get(
+            f"{API_BASE_URL}/progress/timeline",
+            headers=headers
+        ).json()
+        
+        heatmap_data = requests.get(
+            f"{API_BASE_URL}/progress/heatmap",
+            headers=headers
+        ).json()
+        
         personas = fetch_personas()
     except Exception as e:
-        st.error(f"Unable to load progress data. Make sure backend is running.")
+        st.error(f"Unable to load progress data: {str(e)}")
         st.stop()
-    
-    # SECTION 1: Gamification Hero
+
+    # SECTION 1: Gamification Hero  
     col1, col2 = st.columns([2, 1])
     
     with col1:
@@ -597,6 +759,7 @@ def render_learn_tab():
                 with st.expander("Show error details"):
                     st.code(traceback.format_exc())
 
+
 def render_sessions_tab():
     """Render the Sessions tab"""
     st.header("💬 Your Practice Sessions")
@@ -607,32 +770,100 @@ def render_sessions_tab():
         st.info("No sessions yet. Start practicing!")
         return
     
-    sessions_sorted = sorted(sessions, key=lambda x: x['timestamp'], reverse=True)
+    # Sessions is a list of session documents, each with an 'interactions' array
     personas = fetch_personas()
-    questions = fetch_questions(personas[0]['id'] if personas else None)
+    all_questions = requests.get(f"{API_BASE_URL}/questions").json()
     
-    for session in sessions_sorted:
-        persona_name = next((p['name'] for p in personas if p['id'] == session['persona_id']), "Unknown")
-        question = next((q for q in questions if q['id'] == session['question_id']), None)
+    # Display each session
+    for session in sessions:
+        session_date = session.get('login_time', 'Unknown date')
+        interactions = session.get('interactions', [])
         
-        with st.expander(f"**{session['timestamp'][:10]}** - {persona_name} - Score: {session['score']:.1f}"):
-            if question:
-                st.write(f"**Question:** {question['question']}")
-            st.write(f"**Category:** {session['category']}")
-            st.write(f"**Your Response:**")
-            st.write(session['user_response'])
-            st.write(f"**Score:** {session['score']:.1f}/100")
+        if not interactions:
+            continue
+        
+        st.subheader(f"📅 Session: {session_date[:10] if isinstance(session_date, str) else 'Unknown'}")
+        st.write(f"**Total Interactions:** {len(interactions)}")
+        
+        # Sort interactions by timestamp
+        sorted_interactions = sorted(
+            interactions, 
+            key=lambda x: x.get('timestamp', ''), 
+            reverse=True
+        )
+        
+        for idx, interaction in enumerate(sorted_interactions, 1):
+            persona_name = next(
+                (p['name'] for p in personas if p['id'] == interaction.get('persona_id')), 
+                "Unknown"
+            )
+            
+            question_obj = next(
+                (q for q in all_questions if q['id'] == interaction.get('question_id')), 
+                None
+            )
+            
+            score = interaction.get('score', 0)
+            timestamp = interaction.get('timestamp', 'Unknown')[:16]  # Show date and time
+            
+            with st.expander(
+                f"**{idx}. {timestamp}** | {persona_name} | Score: {score:.1f}/100"
+            ):
+                if question_obj:
+                    st.write(f"**Question:** {question_obj.get('question', 'N/A')}")
+                    st.write(f"**Category:** {interaction.get('category', 'N/A')}")
+                    st.write(f"**Difficulty:** {question_obj.get('difficulty', 'N/A').upper()}")
+                else:
+                    st.write(f"**Category:** {interaction.get('category', 'N/A')}")
+                
+                st.divider()
+                
+                st.write("**Your Response:**")
+                st.info(interaction.get('user_response', 'No response recorded'))
+                
+                st.divider()
+                
+                # Score visualization
+                col1, col2 = st.columns([1, 3])
+                with col1:
+                    st.metric("Score", f"{score:.1f}/100")
+                with col2:
+                    if score >= 80:
+                        st.success("Excellent! 🌟")
+                    elif score >= 60:
+                        st.info("Good! 👍")
+                    else:
+                        st.warning("Needs Work 📝")
+        
+        st.markdown("---")
 
+
+def get_auth_headers():
+    """Get authentication headers for API calls"""
+    if not st.session_state.token:
+        st.error("Not authenticated. Please login.")
+        st.stop()
+    return {"Authorization": f"Bearer {st.session_state.token}"}
 
 # ============= MAIN APPLICATION =============
 
 def main():
     """Main application entry point"""
+    st.set_page_config(page_title="MSL Practice Gym", layout="wide")
+    
+    # Check if user is authenticated
+    if st.session_state.token is None:
+        render_auth_page()
+        return
+    
+    # Show logout button in sidebar
+    with st.sidebar:
+        st.write(f"👤 **{st.session_state.username}**")
+        render_logout_button()
+    
     # Initialize session state
     init_session_state()
     
-    # Page config
-    st.set_page_config(page_title="MSL Practice Gym", layout="wide")
     st.title("🏋️ DNATE MSL Practice Gym")
     
     # Create tabs
