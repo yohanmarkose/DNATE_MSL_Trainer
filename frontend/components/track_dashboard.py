@@ -341,34 +341,157 @@ def render_achievements_grid(milestones: List[Dict[str, Any]]):
 
 
 def render_category_breakdown(category_stats: Dict[str, Dict[str, Any]]):
-    """Render detailed category performance breakdown"""
+    """Render detailed category performance breakdown with bar chart"""
     st.write("**Performance by Category**")
     
+    if not category_stats:
+        st.info("Complete sessions in different categories to see breakdown!")
+        return
+    
+    # Prepare data for chart
+    categories = []
+    avg_scores = []
+    session_counts = []
+    
     for category, stats in sorted(category_stats.items(), key=lambda x: x[1]['avg_score'], reverse=True):
-        col1, col2 = st.columns([3, 1])
-        
-        with col1:
-            st.write(f"**{category}**")
-            st.progress(stats['avg_score'] / 100)
-        
-        with col2:
-            st.write(f"{stats['avg_score']:.1f} avg")
-            st.write(f"{stats['count']} sessions")
+        categories.append(category)
+        avg_scores.append(stats['avg_score'])
+        session_counts.append(stats['count'])
+    
+    # Create horizontal bar chart
+    fig = go.Figure()
+    
+    fig.add_trace(go.Bar(
+        y=categories,
+        x=avg_scores,
+        orientation='h',
+        text=[f"{score:.1f}" for score in avg_scores],
+        textposition='inside',
+        textfont=dict(color='white', size=14, family='Arial Black'),
+        marker=dict(
+            color=avg_scores,
+            colorscale=[
+                [0, '#e74c3c'],      # Red for low scores (0-50)
+                [0.5, '#f39c12'],    # Orange for medium scores (50-75)
+                [0.75, '#3498db'],   # Blue for good scores (75-90)
+                [1, '#2ecc71']       # Green for excellent scores (90-100)
+            ],
+            line=dict(color='rgba(0,0,0,0.1)', width=1)
+        ),
+        hovertemplate='<b>%{y}</b><br>Average Score: %{x:.1f}<br>Sessions: %{customdata}<extra></extra>',
+        customdata=session_counts
+    ))
+    
+    fig.update_layout(
+        title={
+            'text': 'Category Performance',
+            'font': {'size': 16, 'color': '#2c3e50'}
+        },
+        xaxis=dict(
+            title='Average Score',
+            range=[0, 100],
+            showgrid=True,
+            gridcolor='rgba(0,0,0,0.1)'
+        ),
+        yaxis=dict(
+            title='',
+            autorange='reversed'
+        ),
+        height=max(300, len(categories) * 60),
+        margin=dict(l=20, r=20, t=60, b=40),
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        showlegend=False
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Add summary table below chart
+    with st.expander("📋 Detailed Breakdown"):
+        for category, score, count in zip(categories, avg_scores, session_counts):
+            col1, col2, col3 = st.columns([3, 1, 1])
+            with col1:
+                st.write(f"**{category}**")
+            with col2:
+                st.write(f"{score:.1f} avg")
+            with col3:
+                st.write(f"{count} session{'s' if count > 1 else ''}")
 
 
 def render_persona_breakdown(persona_stats: Dict[str, Dict[str, Any]], personas: List[Dict[str, Any]]):
-    """Render detailed persona performance breakdown"""
+    """Render detailed persona performance breakdown with bar chart"""
     st.write("**Performance by Persona**")
+    
+    if not persona_stats:
+        st.info("Practice with different personas to see breakdown!")
+        return
+    
+    # Prepare data for chart
+    persona_names = []
+    avg_scores = []
+    session_counts = []
     
     for persona_id, stats in sorted(persona_stats.items(), key=lambda x: x[1]['avg_score'], reverse=True):
         persona_name = next((p['name'] for p in personas if p['id'] == persona_id), persona_id)
-        
-        col1, col2 = st.columns([3, 1])
-        
-        with col1:
-            st.write(f"**{persona_name}**")
-            st.progress(stats['avg_score'] / 100)
-        
-        with col2:
-            st.write(f"{stats['avg_score']:.1f} avg")
-            st.write(f"{stats['count']} sessions")
+        persona_names.append(persona_name)
+        avg_scores.append(stats['avg_score'])
+        session_counts.append(stats['count'])
+    
+    # Create horizontal bar chart
+    fig = go.Figure()
+    
+    fig.add_trace(go.Bar(
+        y=persona_names,
+        x=avg_scores,
+        orientation='h',
+        text=[f"{score:.1f}" for score in avg_scores],
+        textposition='inside',
+        textfont=dict(color='white', size=14, family='Arial Black'),
+        marker=dict(
+            color=avg_scores,
+            colorscale=[
+                [0, '#e74c3c'],      # Red for low scores
+                [0.5, '#f39c12'],    # Orange for medium scores
+                [0.75, '#3498db'],   # Blue for good scores
+                [1, '#2ecc71']       # Green for excellent scores
+            ],
+            line=dict(color='rgba(0,0,0,0.1)', width=1)
+        ),
+        hovertemplate='<b>%{y}</b><br>Average Score: %{x:.1f}<br>Sessions: %{customdata}<extra></extra>',
+        customdata=session_counts
+    ))
+    
+    fig.update_layout(
+        title={
+            'text': 'Persona Performance',
+            'font': {'size': 16, 'color': '#2c3e50'}
+        },
+        xaxis=dict(
+            title='Average Score',
+            range=[0, 100],
+            showgrid=True,
+            gridcolor='rgba(0,0,0,0.1)'
+        ),
+        yaxis=dict(
+            title='',
+            autorange='reversed'
+        ),
+        height=max(300, len(persona_names) * 80),
+        margin=dict(l=20, r=20, t=60, b=40),
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        showlegend=False
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Add summary table below chart
+    with st.expander("📋 Detailed Breakdown"):
+        for name, score, count in zip(persona_names, avg_scores, session_counts):
+            col1, col2, col3 = st.columns([3, 1, 1])
+            with col1:
+                st.write(f"**{name}**")
+            with col2:
+                st.write(f"{score:.1f} avg")
+            with col3:
+                st.write(f"{count} session{'s' if count > 1 else ''}")
