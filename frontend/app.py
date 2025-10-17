@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import random
 from datetime import datetime
+from typing import List, Dict, Any, Optional
 
 from components.track_dashboard import (
     inject_custom_css,
@@ -19,38 +20,132 @@ from components.track_dashboard import (
 
 API_BASE_URL = "http://localhost:8000"
 
-# Initialize session state
-if 'selected_persona' not in st.session_state:
-    st.session_state.selected_persona = None
-if 'selected_question' not in st.session_state:
-    st.session_state.selected_question = None
-if 'user_response' not in st.session_state:
-    st.session_state.user_response = ""
-if 'evaluation_result' not in st.session_state:
-    st.session_state.evaluation_result = None
 
-st.set_page_config(page_title="MSL Practice Gym", layout="wide")
+# ============= SESSION STATE INITIALIZATION =============
 
-st.title("🏋️ DNATE MSL Practice Gym")
-
-# Create tabs
-tab1, track, tab3, tab4 = st.tabs(["🎯 Practice", "📊 Track", "📚 Learn", "💬 Sessions"])
-
-# TAB 1: PRACTICE
-with tab1:
-    st.header("Practice Session")
-    
-    # New Session Button
-    if st.button("🔄 Start New Session", type="primary"):
+def init_session_state():
+    """Initialize session state variables"""
+    if 'selected_persona' not in st.session_state:
         st.session_state.selected_persona = None
+    if 'selected_question' not in st.session_state:
         st.session_state.selected_question = None
+    if 'user_response' not in st.session_state:
         st.session_state.user_response = ""
+    if 'evaluation_result' not in st.session_state:
         st.session_state.evaluation_result = None
-        st.rerun()
-    
-    # Persona Selection
+    if 'current_scenario' not in st.session_state:  # NEW
+        st.session_state.current_scenario = None
+
+
+def reset_session():
+    """Reset practice session state"""
+    st.session_state.selected_persona = None
+    st.session_state.selected_question = None
+    st.session_state.user_response = ""
+    st.session_state.evaluation_result = None
+    st.session_state.current_scenario = None
+
+# ============= API HELPER FUNCTIONS =============
+
+def fetch_personas() -> List[Dict[str, Any]]:
+    """Fetch all personas from API"""
+    try:
+        response = requests.get(f"{API_BASE_URL}/personas")
+        return response.json()
+    except Exception as e:
+        st.error(f"Failed to fetch personas: {e}")
+        return []
+
+
+def fetch_persona_details(persona_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch detailed persona information"""
+    try:
+        response = requests.get(f"{API_BASE_URL}/personas/{persona_id}")
+        return response.json()
+    except Exception as e:
+        st.error(f"Failed to fetch persona details: {e}")
+        return None
+
+
+def fetch_questions(persona_id: str, difficulty: str = "All", category: str = "All") -> List[Dict[str, Any]]:
+    """Fetch filtered questions from API"""
+    try:
+        params = {"persona_id": persona_id}
+        if difficulty != "All":
+            params["difficulty"] = difficulty
+        if category != "All":
+            params["category"] = category
+        
+        response = requests.get(f"{API_BASE_URL}/questions", params=params)
+        return response.json()
+    except Exception as e:
+        st.error(f"Failed to fetch questions: {e}")
+        return []
+
+
+def fetch_categories(persona_id: Optional[str] = None) -> Dict[str, Any]:
+    """Fetch categories, optionally filtered by persona"""
+    try:
+        params = {"persona_id": persona_id} if persona_id else {}
+        response = requests.get(f"{API_BASE_URL}/categories", params=params)
+        return response.json()
+    except Exception as e:
+        st.error(f"Failed to fetch categories: {e}")
+        return {}
+
+
+def fetch_scenario(question_id: int, persona_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch scenario context for a question"""
+    try:
+        response = requests.get(f"{API_BASE_URL}/scenario/{question_id}/{persona_id}")
+        return response.json()
+    except Exception as e:
+        st.error(f"Failed to fetch scenario: {e}")
+        return None
+
+
+def submit_evaluation(question_id: int, persona_id: str, user_response: str) -> Optional[Dict[str, Any]]:
+    """Submit user response for evaluation"""
+    try:
+        payload = {
+            "question_id": question_id,
+            "persona_id": persona_id,
+            "user_response": user_response
+        }
+        response = requests.post(f"{API_BASE_URL}/evaluate", json=payload)
+        return response.json()
+    except Exception as e:
+        st.error(f"Failed to evaluate response: {e}")
+        return None
+
+
+def fetch_model_answer(question_id: int, persona_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Fetch model answer for a question"""
+    try:
+        params = {"persona_id": persona_id} if persona_id else {}
+        response = requests.get(f"{API_BASE_URL}/model-answer/{question_id}", params=params)
+        return response.json()
+    except Exception as e:
+        st.error(f"Failed to fetch model answer: {e}")
+        return None
+
+
+def fetch_sessions() -> List[Dict[str, Any]]:
+    """Fetch all practice sessions"""
+    try:
+        response = requests.get(f"{API_BASE_URL}/sessions")
+        return response.json()
+    except Exception as e:
+        st.error(f"Failed to fetch sessions: {e}")
+        return []
+
+
+# ============= UI COMPONENT FUNCTIONS =============
+
+def render_persona_selection():
+    """Render persona selection UI"""
     st.subheader("1. Select Physician Persona")
-    personas = requests.get(f"{API_BASE_URL}/personas").json()
+    personas = fetch_personas()
     
     col1, col2, col3 = st.columns(3)
     
@@ -65,182 +160,238 @@ with tab1:
                 st.session_state.selected_persona = persona['id']
                 st.rerun()
     
-    if st.session_state.selected_persona:
-        # Change this?
-        st.success(f"Selected: {next(p['name'] for p in personas if p['id'] == st.session_state.selected_persona)}")
-        
-        # Get persona details
-        persona_details = requests.get(f"{API_BASE_URL}/personas/{st.session_state.selected_persona}").json()
-        
+    return personas
+
+
+def render_persona_details(persona_id: str, personas: List[Dict[str, Any]]):
+    """Render selected persona details"""
+    persona_name = next((p['name'] for p in personas if p['id'] == persona_id), "Unknown")
+    st.success(f"Selected: {persona_name}")
+    
+    persona_details = fetch_persona_details(persona_id)
+    if persona_details:
         with st.expander("👤 View Persona Details"):
             st.write(f"**Practice Setting:** {persona_details['practice_setting']['type']}")
             st.write(f"**Communication Style:** {persona_details['communication_style']['tone']}")
             st.write("**Priorities:**")
             for priority in persona_details['priorities'][:3]:
                 st.write(f"- {priority}")
+
+
+def render_question_filters(persona_id: str) -> tuple[str, str]:
+    """Render question filter controls and return selected values"""
+    st.subheader("2. Filter Questions")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        difficulty = st.selectbox(
+            "Difficulty",
+            ["All", "low", "medium", "high"]
+        )
+    
+    with col2:
+        categories_response = fetch_categories(persona_id)
+        category = st.selectbox(
+            "Category",
+            ["All"] + list(categories_response.keys())
+        )
+    
+    return difficulty, category
+
+
+def render_question_selection(persona_id: str, difficulty: str, category: str) -> Optional[Dict[str, Any]]:
+    """Render question selection UI"""
+    questions = fetch_questions(persona_id, difficulty, category)
+    
+    st.write(f"**{len(questions)} questions available**")
+    st.subheader("3. Select Question")
+    
+    if not questions:
+        st.warning("No questions available with selected filters.")
+        return None
+    
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        selected_q = st.selectbox(
+            "Choose a question",
+            questions,
+            format_func=lambda q: f"{q['category']} - {q['question'][:80]}..."
+        )
+        if selected_q != st.session_state.selected_question:
+            st.session_state.current_scenario = None  # NEW: Clear cached scenario
+            st.session_state.selected_question = None
+            st.session_state.evaluation_result = None
+            st.session_state.user_response = ""
+    
+    with col2:
+        if st.button("🎲 Random Question"):
+            selected_q = random.choice(questions)
+            st.session_state.selected_question = selected_q
+            st.session_state.current_scenario = None  # NEW: Clear cached scenario
+            st.rerun()
+    
+    if st.button("Select This Question"):
+        st.session_state.user_response = None
+        st.session_state.selected_question = selected_q
+        st.session_state.current_scenario = None  # NEW: Clear cached scenario
+        st.session_state.evaluation_result = None
+        st.rerun()
+    
+    return selected_q
+
+def render_scenario_context(question: Dict[str, Any], persona_id: str):
+    """Render scenario context for selected question"""
+    st.divider()
+    st.subheader("📖 Scenario Context")
+    
+    # Generate scenario only if not cached or question changed
+    scenario_key = f"{question['id']}_{persona_id}"
+    
+    if (st.session_state.current_scenario is None or 
+        st.session_state.current_scenario.get('key') != scenario_key):
         
-        # Filters
-        st.subheader("2. Filter Questions")
+        with st.spinner("Generating realistic scenario..."):
+            scenario = fetch_scenario(question['id'], persona_id)
         
-        col1, col2 = st.columns(2)
+        if scenario:
+            # Cache the scenario with a unique key
+            st.session_state.current_scenario = {
+                'key': scenario_key,
+                'data': scenario
+            }
+    
+    # Use cached scenario
+    if st.session_state.current_scenario:
+        scenario = st.session_state.current_scenario['data']
         
-        with col1:
-            difficulty = st.selectbox(
-                "Difficulty",
-                ["All", "low", "medium", "high"]
-            )
+        st.markdown(f"""
+        <div style="padding: 15px; background-color: #e8f4f8; border-radius: 10px; border-left: 5px solid #2196F3;">
+            <p style="margin: 5; font-style: italic;">{scenario['scenario']}</p>
+            <p style="margin: 0; font-weight: bold; font-size: 16;">{question['question']}</p>
+        </div> <br>
+        <div style="padding: 15px; background-color: #f0f2f6; border-radius: 10px; border-left: 5px solid #1f77b4;">
+            <p style="margin: 0;"><strong>Category:</strong> {question['category']}</p>
+            <p style="margin: 0;"><strong>Difficulty:</strong> {question['difficulty'].upper()}</p>
+            <p style="margin: 0;"><strong>Context:</strong> {question['context']}</p>
+            <p style="margin: 0;"><strong>Estimated Time:</strong> {question['estimated_response_time']} seconds</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+def render_response_input(question: Dict[str, Any], persona_id: str):
+    """Render response input and submission"""
+    if st.session_state.selected_question is not None:
+        st.divider()
+        st.subheader("5. Your Response")
         
-        with col2:
-            if st.session_state.selected_persona:
-                categories_response = requests.get(
-                    f"{API_BASE_URL}/categories",
-                    params={"persona_id": st.session_state.selected_persona}
-                ).json()
+        user_responses = st.text_area(
+            "Type your response as an MSL:",
+            value=st.session_state.user_response,  # This reads from session state
+            height=200,
+            key="response_input",
+            placeholder="Write your response here..."
+        )
+        
+        if st.button("✅ Submit Response", type="primary"):
+            if user_responses.strip():
+                with st.spinner("Evaluating your response..."):
+                    # Save to session state only when submitting
+                    st.session_state.user_response = user_responses
+                    result = submit_evaluation(question['id'], persona_id, user_responses)
+                    if result:
+                        st.session_state.evaluation_result = result
+                        st.rerun()
             else:
-                categories_response = requests.get(f"{API_BASE_URL}/categories").json()
-            category = st.selectbox(
-                "Category",
-                ["All"] + list(categories_response .keys())
-            )
+                st.error("Please provide a response before submitting.")
+
+def render_evaluation_results(result: Dict[str, Any]):
+    """Render evaluation results"""
+    st.divider()
+    st.subheader("📈 Evaluation Results")
+    
+    score = result['score']
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric("Your Score", f"{score:.1f}/100")
+    
+    with col2:
+        if score >= 80:
+            st.success("Excellent! 🌟")
+        elif score >= 60:
+            st.info("Good! 👍")
+        else:
+            st.warning("Needs Work 📝")
+    
+    st.write("**Feedback:**", result['feedback'])
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write("**✅ Priorities Covered:**")
+        if result['priorities_covered']:
+            for p in result['priorities_covered']:
+                st.write(f"- {p}")
+        else:
+            st.write("None")
+    
+    with col2:
+        st.write("**✅ Engagement Points Covered:**")
+        if result['engagement_points_covered']:
+            for e in result['engagement_points_covered']:
+                st.write(f"- {e}")
+        else:
+            st.write("None")
+    
+    if result['missing_points']:
+        st.write("**❌ Consider Adding:**")
+        for m in result['missing_points'][:5]:
+            st.write(f"- {m}")
+
+
+# ============= TAB RENDERING FUNCTIONS =============
+
+def render_practice_tab():
+    """Render the Practice tab"""
+    st.header("Practice Session")
+    
+    # New Session Button
+    if st.button("🔄 Start New Session", type="primary"):
+        reset_session()
+        st.rerun()
+    
+    # Persona Selection
+    personas = render_persona_selection()
+    
+    if st.session_state.selected_persona:
+        render_persona_details(st.session_state.selected_persona, personas)
         
-        # Get filtered questions
-        params = {"persona_id": st.session_state.selected_persona}
-        if difficulty != "All":
-            params["difficulty"] = difficulty
-        if category != "All":
-            params["category"] = category
-        
-        questions = requests.get(f"{API_BASE_URL}/questions", params=params).json()
-        
-        st.write(f"**{len(questions)} questions available**")
+        # Question Filters
+        difficulty, category = render_question_filters(st.session_state.selected_persona)
         
         # Question Selection
-        st.subheader("3. Select Question")
+        selected_q = render_question_selection(
+            st.session_state.selected_persona,
+            difficulty,
+            category
+        )
         
-        col1, col2 = st.columns([3, 1])
-        
-        with col1:
-            if questions:
-                selected_q = st.selectbox(
-                    "Choose a question",
-                    questions,
-                    format_func=lambda q: f"{q['category']} - {q['question'][:80]}..."
-                )
-        
-        with col2:
-            if st.button("🎲 Random Question") and questions:
-                selected_q = random.choice(questions)
-                st.session_state.selected_question = selected_q
-                st.rerun()
-        
-        if questions:
-            if st.button("Select This Question"):
-                st.session_state.selected_question = selected_q
-                st.rerun()
-        
-        # Question Card
-        # Set up a story based on the selected persona and question
+        # Question Card and Response
         if st.session_state.selected_question:
+            st.session_state.user_response = ""  # Reset user response on new question selections
             q = st.session_state.selected_question
-            st.divider()
-            st.subheader("📖 Scenario Context")
             
-            with st.spinner("Generating realistic scenario..."):
-                scenario = requests.get(
-                    f"{API_BASE_URL}/scenario/{q['id']}/{st.session_state.selected_persona}"
-                ).json()
-            
-            st.markdown(f"""
-            <div style="padding: 20px; background-color: #f0f2f6; border-radius: 10px; border-left: 5px solid #1f77b4;">
-                <p><strong>Category:</strong> {q['category']}</p>
-                <p><strong>Difficulty:</strong> {q['difficulty'].upper()}</p>
-                <p><strong>Context:</strong> {q['context']}</p>
-                <p><strong>Estimated Time:</strong> {q['estimated_response_time']} seconds</p>
-            </div>
-            <div style="padding: 15px; background-color: #e8f4f8; border-radius: 10px; border-left: 5px solid #2196F3;">
-                <p style="margin: 0; font-style: italic;">{scenario['scenario']}</p>
-                <p style="margin: 0; font-style: italic;">{q['question']}</p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            st.divider()
-                    
-            # Response Input
-            st.subheader("5. Your Response")
-            
-            user_response = st.text_area(
-                "Type your response as an MSL:",
-                value=st.session_state.user_response,
-                height=200,
-                key="response_input"
-            )
-                
-            if st.button("✅ Submit Response", type="primary"):
-                if user_response.strip():
-                    # Evaluate response
-                    payload = {
-                        "question_id": q["id"],
-                        "persona_id": st.session_state.selected_persona,
-                        "user_response": user_response
-                    }
-                    
-                    with st.spinner("Evaluating your response..."):
-                        result = requests.post(f"{API_BASE_URL}/evaluate", json=payload).json()
-                        st.session_state.evaluation_result = result
-                        st.session_state.user_response = user_response
-                        st.rerun()
-                else:
-                    st.error("Please provide a response before submitting.")
+            render_scenario_context(q, st.session_state.selected_persona)
+            render_response_input(q, st.session_state.selected_persona)
             
             # Show Evaluation
             if st.session_state.evaluation_result:
-                result = st.session_state.evaluation_result
-                
-                st.divider()
-                st.subheader("📈 Evaluation Results")
-                
-                # Score display
-                score = result['score']
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    st.metric("Your Score", f"{score:.1f}/100")
-                
-                with col2:
-                    if score >= 80:
-                        st.success("Excellent! 🌟")
-                    elif score >= 60:
-                        st.info("Good! 👍")
-                    else:
-                        st.warning("Needs Work 📝")
-                
-                st.write("**Feedback:**", result['feedback'])
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.write("**✅ Priorities Covered:**")
-                    if result['priorities_covered']:
-                        for p in result['priorities_covered']:
-                            st.write(f"- {p}")
-                    else:
-                        st.write("None")
-                
-                with col2:
-                    st.write("**✅ Engagement Points Covered:**")
-                    if result['engagement_points_covered']:
-                        for e in result['engagement_points_covered']:
-                            st.write(f"- {e}")
-                    else:
-                        st.write("None")
-                
-                if result['missing_points']:
-                    st.write("**❌ Consider Adding:**")
-                    for m in result['missing_points'][:5]:
-                        st.write(f"- {m}")
+                render_evaluation_results(st.session_state.evaluation_result)
 
-# TAB 2: TRACK (Progress Dashboard)
-with track:
+
+def render_track_tab():
+    """Render the Track tab"""
     inject_custom_css()
     
     st.header("📊 Progress Dashboard")
@@ -251,19 +402,18 @@ with track:
         milestones_data = requests.get(f"{API_BASE_URL}/progress/milestones").json()
         timeline = requests.get(f"{API_BASE_URL}/progress/timeline").json()
         heatmap_data = requests.get(f"{API_BASE_URL}/progress/heatmap").json()
-        personas = requests.get(f"{API_BASE_URL}/personas").json()
+        personas = fetch_personas()
     except Exception as e:
         st.error(f"Unable to load progress data. Make sure backend is running.")
         st.stop()
     
     # SECTION 1: Gamification Hero
-    # st.markdown("---")
-    level, streak = st.columns([2, 1])
+    col1, col2 = st.columns([2, 1])
     
-    with level:
+    with col1:
         render_level_card(progress)
     
-    with streak:
+    with col2:
         render_streak_card(
             progress.get('current_streak_days', 0),
             progress.get('longest_streak_days', 0)
@@ -315,12 +465,18 @@ with track:
     if progress.get('persona_stats'):
         render_persona_breakdown(progress['persona_stats'], personas)
 
-# TAB 3: LEARN
-with tab3:
+def render_learn_tab():
+    """Render the Learn tab"""
     st.header("📚 Model Answers")
     
+    # Initialize cache in session state
+    if 'model_answers_cache' not in st.session_state:
+        st.session_state.model_answers_cache = {}
+    if 'learn_tab_initialized' not in st.session_state:
+        st.session_state.learn_tab_initialized = False
+    
     # Add persona selector
-    personas = requests.get(f"{API_BASE_URL}/personas").json()
+    personas = fetch_personas()
     selected_persona_learn = st.selectbox(
         "Select Persona (optional - for tailored answers)",
         ["None"] + [p['name'] for p in personas],
@@ -331,7 +487,16 @@ with tab3:
     if selected_persona_learn != "None":
         persona_id_param = next(p['id'] for p in personas if p['name'] == selected_persona_learn)
     
-    questions = requests.get(f"{API_BASE_URL}/questions").json()
+    # Clear cache when persona changes
+    if 'last_selected_persona' not in st.session_state:
+        st.session_state.last_selected_persona = None
+    
+    if st.session_state.last_selected_persona != persona_id_param:
+        st.session_state.model_answers_cache = {}
+        st.session_state.last_selected_persona = persona_id_param
+        st.session_state.learn_tab_initialized = False
+    
+    questions = fetch_questions(persona_id_param or personas[0]['id'] if personas else None)
     
     category_filter = st.selectbox(
         "Filter by Category",
@@ -339,50 +504,109 @@ with tab3:
     )
     
     if category_filter != "All":
-        questions = [q for q in questions if q['category'] == category_filter]
+        filtered_questions = [q for q in questions if q['category'] == category_filter]
+    else:
+        filtered_questions = questions
     
-    for q in questions:
+    # Auto-generate answers on first load
+    if not st.session_state.learn_tab_initialized:
+        st.info("📚 Loading model answers for all questions...")
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        for idx, q in enumerate(questions):
+            cache_key = f"{q['id']}_{persona_id_param}"
+            
+            if cache_key not in st.session_state.model_answers_cache:
+                status_text.text(f"Generating answer {idx + 1}/{len(questions)}: {q['category']}")
+                model_ans = fetch_model_answer(q['id'], persona_id_param)
+                if model_ans:
+                    st.session_state.model_answers_cache[cache_key] = model_ans
+            
+            progress_bar.progress((idx + 1) / len(questions))
+        
+        progress_bar.empty()
+        status_text.empty()
+        st.session_state.learn_tab_initialized = True
+        st.success("✅ All model answers loaded!")
+    
+    # Show cache status
+    st.caption(f"📦 {len(st.session_state.model_answers_cache)} answers cached")
+    
+    # Display questions with cached answers
+    for q in filtered_questions:
+        cache_key = f"{q['id']}_{persona_id_param}"
+        
         with st.expander(f"**{q['category']}** - {q['question']}"):
-            params = {"persona_id": persona_id_param} if persona_id_param else {}
+            model_ans = st.session_state.model_answers_cache.get(cache_key)
             
-            with st.spinner("Generating model answer..."):
-                model_ans = requests.get(
-                    f"{API_BASE_URL}/model-answer/{q['id']}", 
-                    params=params
-                ).json()
-            
-            if model_ans.get('persona_tailored'):
-                st.success("✨ Answer tailored for selected persona")
-            
-            st.write("**Model Answer:**")
-            st.info(model_ans['model_answer'])
-            
-            st.write("**Key Themes to Cover:**")
-            for point in model_ans['key_points']:
-                st.write(f"- {point}")
+            if model_ans:
+                if model_ans.get('persona_tailored'):
+                    st.success("✨ Answer tailored for selected persona")
+                
+                st.write("**Model Answer:**")
+                st.info(model_ans['model_answer'])
+                
+                st.write("**Key Themes to Cover:**")
+                for point in model_ans['key_points']:
+                    st.write(f"- {point}")
+            else:
+                st.warning("⚠️ Answer not available in cache")
 
-# TAB 4: SESSIONS
-with tab4:
+def render_sessions_tab():
+    """Render the Sessions tab"""
     st.header("💬 Your Practice Sessions")
     
-    sessions = requests.get(f"{API_BASE_URL}/sessions").json()
+    sessions = fetch_sessions()
     
     if not sessions:
         st.info("No sessions yet. Start practicing!")
-    else:
-        sessions_sorted = sorted(sessions, key=lambda x: x['timestamp'], reverse=True)
+        return
+    
+    sessions_sorted = sorted(sessions, key=lambda x: x['timestamp'], reverse=True)
+    personas = fetch_personas()
+    questions = fetch_questions(personas[0]['id'] if personas else None)
+    
+    for session in sessions_sorted:
+        persona_name = next((p['name'] for p in personas if p['id'] == session['persona_id']), "Unknown")
+        question = next((q for q in questions if q['id'] == session['question_id']), None)
         
-        for session in sessions_sorted:
-            personas = requests.get(f"{API_BASE_URL}/personas").json()
-            questions = requests.get(f"{API_BASE_URL}/questions").json()
-            
-            persona_name = next((p['name'] for p in personas if p['id'] == session['persona_id']), "Unknown")
-            question = next((q for q in questions if q['id'] == session['question_id']), None)
-            
-            with st.expander(f"**{session['timestamp'][:10]}** - {persona_name} - Score: {session['score']:.1f}"):
-                if question:
-                    st.write(f"**Question:** {question['question']}")
-                st.write(f"**Category:** {session['category']}")
-                st.write(f"**Your Response:**")
-                st.write(session['user_response'])
-                st.write(f"**Score:** {session['score']:.1f}/100")
+        with st.expander(f"**{session['timestamp'][:10]}** - {persona_name} - Score: {session['score']:.1f}"):
+            if question:
+                st.write(f"**Question:** {question['question']}")
+            st.write(f"**Category:** {session['category']}")
+            st.write(f"**Your Response:**")
+            st.write(session['user_response'])
+            st.write(f"**Score:** {session['score']:.1f}/100")
+
+
+# ============= MAIN APPLICATION =============
+
+def main():
+    """Main application entry point"""
+    # Initialize session state
+    init_session_state()
+    
+    # Page config
+    st.set_page_config(page_title="MSL Practice Gym", layout="wide")
+    st.title("🏋️ DNATE MSL Practice Gym")
+    
+    # Create tabs
+    tab1, tab2, tab3, tab4 = st.tabs(["🎯 Practice", "📊 Track", "📚 Learn", "💬 Sessions"])
+    
+    # Render tabs
+    with tab1:
+        render_practice_tab()
+    
+    with tab2:
+        render_track_tab()
+    
+    with tab3:
+        render_learn_tab()
+    
+    with tab4:
+        render_sessions_tab()
+
+
+if __name__ == "__main__":
+    main()
