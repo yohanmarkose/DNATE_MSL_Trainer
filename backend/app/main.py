@@ -119,46 +119,6 @@ def format_category(category):
     merged_dict = {k: v for d in category for k, v in d.items()}
     return merged_dict
 
-@app.get("/protected")
-async def protected_route(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    return {"token": credentials.credentials}
-
-# ------------------------------------------------
-# Helper: Get current user from Authorization token
-# ------------------------------------------------
-# async def get_current_user(authorization: str = Header(None)):
-#     print(f'auth : {authorization}')
-#     if not authorization or not authorization.startswith("Bearer "):
-#         raise HTTPException(status_code=401, detail="Invalid authorization header")
-#     token = authorization.split(" ")[1]
-#     payload = decode_access_token(token)
-#     if not payload:
-#         raise HTTPException(status_code=401, detail="Invalid or expired token")
-#     user = await users_collection.find_one({"_id": payload["user_id"]})
-#     if not user:
-#         raise HTTPException(status_code=404, detail="User not found")
-#     return user
-
-async def get_current_user(Authorization: str = Header(None)):
-    """
-    Extract and validate user from JWT token in the Authorization header.
-    """
-    if not Authorization or not Authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Invalid authorization header")
-
-    token = Authorization.split(" ")[1]
-    payload = decode_access_token(token)
-    if not payload:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-    user = await users_collection.find_one({"_id": payload["user_id"]})
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    # Optionally attach session_id if available
-    user["session_id"] = payload.get("session_id")
-    return user
-
 # ------------------------------------------------
 # SIGNUP ENDPOINT
 # ------------------------------------------------
@@ -248,14 +208,6 @@ async def logout(
         )
 
     return {"message": "Logged out successfully"}
-# ------------------------------------------------
-# PROTECTED USER DATA ENDPOINT (DATA ISOLATION)
-# ------------------------------------------------
-# @app.get("/user/me")
-# async def get_user_profile(current_user=Depends(get_current_user)):
-#     # Always isolate queries to current user
-#     user = await users_collection.find_one({"_id": current_user["_id"]}, {"password_hash": 0})
-#     return user
 
 @app.get("/personas")
 async def get_personas():
@@ -473,12 +425,12 @@ Respond in this JSON format:
             "category": question["category"]
         }
 
-        result = await sessions_collection.update_one(
+        update_response = await sessions_collection.update_one(
             {"session_id": session_id},          # Find the correct session
             {"$push": {"interactions": interaction}}  # Append interaction
         )
 
-        if result.matched_count == 0:
+        if update_response.matched_count == 0:
             # Optional: handle session not found
             raise Exception(f"Session {session_id} not found.")
 
@@ -569,12 +521,6 @@ Also provide:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Model answer generation failed: {str(e)}")
 
-# @app.get("/progress")
-# async def get_progress():
-#     user_progress_data = await user_progress_collections.find({}).to_list(length=None)
-#     user_progress_data = convert_objectid(user_progress_data)
-#     return user_progress_data
-
 @app.get("/progress")
 async def get_progress(credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
@@ -603,28 +549,45 @@ async def get_sessions(credentials: HTTPAuthorizationCredentials = Depends(secur
         return {"message": "No sessions found for this user."}
 
     user_sessions = convert_objectid(user_sessions)
-    return list(sessions_store.values())
+    # return list(sessions_store.values())
+    return user_sessions
+
 
 @app.get("/progress/detailed")
-def get_detailed_progress():
+async def get_detailed_progress(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Get comprehensive progress data for Track dashboard"""
-    sessions_list = list(sessions_store.values())
-    xp_info = xp_progress_to_next_level(user_progress["experience_points"])
+    token = credentials.credentials
+    payload = decode_access_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    user_id = payload["user_id"]
+    user_sessions = await sessions_collection.find({"user_id": user_id}).to_list(length=None)
+    if not user_sessions:
+        return {"message": "No sessions found for this user."}
+
+    user_sessions = convert_objectid(user_sessions)
+    # sessions_list = list(sessions_store.values())
+    user_progress_data = await user_progress_collections.find_one({"user_id": user_id})
+    if not user_progress_data:
+        raise HTTPException(status_code=404, detail="User progress not found")
+    user_progress_data = convert_objectid(user_progress_data)
+
+    xp_info = xp_progress_to_next_level(user_progress_data["experience_points"])
     
-    improvement = calculate_improvement_rate(user_progress["scores_history"])
+    improvement = calculate_improvement_rate(user_progress_data["scores_history"])
     
     daily_progress = calculate_goal_progress(
-        get_sessions_today(sessions_list),
-        user_progress["daily_goal"]
+        get_sessions_today(user_sessions),
+        user_progress_data["daily_goal"]
     )
     
     weekly_progress = calculate_goal_progress(
-        get_sessions_this_week(sessions_list),
-        user_progress["weekly_goal"]
+        get_sessions_this_week(user_sessions),
+        user_progress_data["weekly_goal"]
     )
     
     return {
-        **user_progress,
+        **user_progress_data,
         **xp_info,
         "sessions_today": daily_progress["current"],
         "sessions_this_week": weekly_progress["current"],
@@ -635,23 +598,46 @@ def get_detailed_progress():
 
 
 @app.get("/progress/milestones")
-def get_milestones():
+async def get_milestones(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Get all milestones with achievement status"""
-    milestones_list = get_all_milestones_with_status(user_progress["milestones_achieved"])
+    token = credentials.credentials
+    payload = decode_access_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    user_id = payload["user_id"]
+
+    user_progress_data = await user_progress_collections.find_one({"user_id": user_id})
+    if not user_progress_data:
+        raise HTTPException(status_code=404, detail="User progress not found")
+
+    user_progress_data = convert_objectid(user_progress_data)
+    milestones_list = get_all_milestones_with_status(user_progress_data["milestones_achieved"])
     
     return {
         "milestones": milestones_list,
-        "total_achieved": len(user_progress["milestones_achieved"]),
+        "total_achieved": len(user_progress_data["milestones_achieved"]),
         "total_available": len(MILESTONES)
     }
 
 
 @app.get("/progress/timeline")
-def get_progress_timeline():
+async def get_progress_timeline(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Get score history for charts"""
     timeline = []
+
+    token = credentials.credentials
+    payload = decode_access_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    user_id = payload["user_id"]
+
+    user_progress_data = await user_progress_collections.find_one({"user_id": user_id})
+    if not user_progress_data:
+        raise HTTPException(status_code=404, detail="User progress not found")
+
+    user_progress_data = convert_objectid(user_progress_data)
     
-    for i, (score, timestamp) in enumerate(zip(user_progress["scores_history"], user_progress["score_timestamps"])):
+    for i, (score, timestamp) in enumerate(zip(user_progress_data["scores_history"], user_progress_data["score_timestamps"])):
         timeline.append({
             "session_number": i + 1,
             "score": score,
@@ -663,11 +649,23 @@ def get_progress_timeline():
 
 
 @app.get("/progress/heatmap")
-def get_practice_heatmap():
+async def get_practice_heatmap(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Get practice frequency data for heatmap"""
     date_counts = {}
+
+    token = credentials.credentials
+    payload = decode_access_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    user_id = payload["user_id"]
+
+    user_progress_data = await user_progress_collections.find_one({"user_id": user_id})
+    if not user_progress_data:
+        raise HTTPException(status_code=404, detail="User progress not found")
+
+    user_progress_data = convert_objectid(user_progress_data)
     
-    for date_str in user_progress["practice_dates"]:
+    for date_str in user_progress_data["practice_dates"]:
         date_counts[date_str] = date_counts.get(date_str, 0) + 1
     
     heatmap_data = [
