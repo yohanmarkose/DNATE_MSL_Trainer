@@ -41,15 +41,32 @@ with tab1:
     st.header("Practice Session")
     
     # New Session Button
-    if st.button("🔄 Start New Session", type="primary"):
-        st.session_state.selected_persona = None
-        st.session_state.selected_question = None
-        st.session_state.user_response = ""
-        st.session_state.evaluation_result = None
-        st.rerun()
+    if st.session_state.user_response or st.session_state.evaluation_result:
+        # User has work in progress
+        if st.button("🔄 Start New Session", type="primary"):
+            st.warning("⚠️ Starting a new session will clear your current work.")
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("✅ Yes, start new", use_container_width=True):
+                    st.session_state.selected_persona = None
+                    st.session_state.selected_question = None
+                    st.session_state.user_response = ""
+                    st.session_state.evaluation_result = None
+                    st.rerun()
+            with col2:
+                if st.button("❌ Cancel", use_container_width=True):
+                    st.rerun()
+    else:
+        # No work in progress, safe to reset
+        if st.button("🔄 Start New Session", type="primary"):
+            st.session_state.selected_persona = None
+            st.session_state.selected_question = None
+            st.session_state.user_response = ""
+            st.session_state.evaluation_result = None
+            st.rerun()
     
     # Persona Selection
-    st.subheader("1. Select Physician Persona")
+    st.subheader("Select Physician Persona")
     personas = requests.get(f"{API_BASE_URL}/personas").json()
     
     col1, col2, col3 = st.columns(3)
@@ -159,7 +176,7 @@ with tab1:
             </div>
             <div style="padding: 15px; background-color: #e8f4f8; border-radius: 10px; border-left: 5px solid #2196F3;">
                 <p style="margin: 0; font-style: italic;">{scenario['scenario']}</p>
-                <p style="margin: 0; font-style: italic;">{q['question']}</p>
+                <p style="margin: 0; font-style: italic; font-weight: bold;">{q['question']}</p>
             </div>
             """, unsafe_allow_html=True)
             

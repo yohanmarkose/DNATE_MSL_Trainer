@@ -204,6 +204,7 @@ Physician Persona:
 - Practice Setting: {persona['practice_setting']['type']}
 - Key Priorities: {', '.join(persona['priorities'][:3])}
 - Communication Style: {persona['communication_style']['tone']}
+- Engagement Tips: {', '.join(persona['engagement_tips'])}
 
 Question Asked: {question['question']}
 Category: {question['category']}
