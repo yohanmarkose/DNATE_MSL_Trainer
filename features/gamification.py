@@ -206,35 +206,75 @@ def get_all_milestones_with_status(achieved_milestone_ids: List[str]) -> List[Di
 
 # ============= SESSION COUNTING FUNCTIONS =============
 
-def count_sessions_in_period(sessions: List[Dict[str, Any]], start_date: datetime, end_date: datetime = None) -> int:
-    """Count sessions within a date range"""
+# def count_sessions_in_period(sessions: List[Dict[str, Any]], start_date: datetime, end_date: datetime = None) -> int:
+#     """Count sessions within a date range"""
+#     if end_date is None:
+#         end_date = datetime.now()
+    
+#     count = 0
+#     for session in sessions:
+#         try:
+#             session_date = datetime.fromisoformat(session.get("timestamp", ""))
+#             if start_date <= session_date <= end_date:
+#                 count += 1
+#         except (ValueError, TypeError):
+#             continue
+    
+#     return count
+
+
+# def get_sessions_today(sessions: List[Dict[str, Any]]) -> int:
+#     """Count sessions from today"""
+#     today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+#     return count_sessions_in_period(sessions, today_start)
+
+
+# def get_sessions_this_week(sessions: List[Dict[str, Any]]) -> int:
+#     """Count sessions from this week (Monday-Sunday)"""
+#     today = datetime.now()
+#     week_start = (today - timedelta(days=today.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+#     return count_sessions_in_period(sessions, week_start)
+
+# ============= SESSION COUNTING FUNCTIONS =============
+
+def count_interactions_in_period(sessions: List[Dict[str, Any]], start_date: datetime, end_date: datetime = None) -> int:
+    """Count interactions within a date range from session documents"""
     if end_date is None:
-        end_date = datetime.now()
+        end_date = datetime.utcnow()
     
     count = 0
+    
+    # Sessions is a list of session documents, each containing an 'interactions' array
     for session in sessions:
-        try:
-            session_date = datetime.fromisoformat(session.get("timestamp", ""))
-            if start_date <= session_date <= end_date:
-                count += 1
-        except (ValueError, TypeError):
-            continue
+        interactions = session.get("interactions", [])
+        
+        for interaction in interactions:
+            try:
+                # Parse timestamp from interaction
+                timestamp_str = interaction.get("timestamp", "")
+                interaction_date = datetime.fromisoformat(timestamp_str)
+                
+                if start_date <= interaction_date <= end_date:
+                    count += 1
+            except (ValueError, TypeError, AttributeError):
+                continue
     
     return count
 
 
 def get_sessions_today(sessions: List[Dict[str, Any]]) -> int:
-    """Count sessions from today"""
-    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    return count_sessions_in_period(sessions, today_start)
+    """Count interactions from today"""
+    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_end = datetime.utcnow()
+    return count_interactions_in_period(sessions, today_start, today_end)
 
 
 def get_sessions_this_week(sessions: List[Dict[str, Any]]) -> int:
-    """Count sessions from this week (Monday-Sunday)"""
-    today = datetime.now()
+    """Count interactions from this week (Monday-Sunday)"""
+    today = datetime.utcnow()
     week_start = (today - timedelta(days=today.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
-    return count_sessions_in_period(sessions, week_start)
-
+    week_end = datetime.utcnow()
+    return count_interactions_in_period(sessions, week_start, week_end)
 
 # ============= GOAL FUNCTIONS =============
 
