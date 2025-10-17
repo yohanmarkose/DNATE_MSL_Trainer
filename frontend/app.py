@@ -340,43 +340,90 @@ with tab3:
     personas = requests.get(f"{API_BASE_URL}/personas").json()
     selected_persona_learn = st.selectbox(
         "Select Persona (optional - for tailored answers)",
-        ["None"] + [p['name'] for p in personas],
+        ["None"] + [f"{p['name']} ({p['specialty']})" for p in personas],
         key="learn_persona"
     )
     
     persona_id_param = None
     if selected_persona_learn != "None":
-        persona_id_param = next(p['id'] for p in personas if p['name'] == selected_persona_learn)
+        persona_id_param = next(p['id'] for p in personas if f"{p['name']} ({p['specialty']})" == selected_persona_learn)
     
-    questions = requests.get(f"{API_BASE_URL}/questions").json()
+    # Get all questions for category filter
+    questions_list = requests.get(f"{API_BASE_URL}/questions").json()
+    categories = sorted(list(set(q['category'] for q in questions_list)))
     
     category_filter = st.selectbox(
         "Filter by Category",
-        ["All"] + list(set(q['category'] for q in questions))
+        ["All"] + categories
     )
     
+    # Build params for API call
+    params = {}
+    if persona_id_param:
+        params["persona_id"] = persona_id_param
     if category_filter != "All":
-        questions = [q for q in questions if q['category'] == category_filter]
+        params["category"] = category_filter
     
-    for q in questions:
-        with st.expander(f"**{q['category']}** - {q['question']}"):
-            params = {"persona_id": persona_id_param} if persona_id_param else {}
-            
-            with st.spinner("Generating model answer..."):
-                model_ans = requests.get(
-                    f"{API_BASE_URL}/model-answer/{q['id']}", 
+    if st.button("📖 Get Model Answers", type="primary"):
+        with st.spinner("Loading model answers..."):
+            try:
+                response = requests.get(
+                    f"{API_BASE_URL}/model-answers",
                     params=params
-                ).json()
+                )
+                
+                if response.status_code != 200:
+                    st.error(f"Error: Server returned status {response.status_code}")
+                    st.stop()
+                
+                data = response.json()
+                answers = data.get("answers", [])
+                
+                if not answers:
+                    st.warning("No model answers found for the selected filters.")
+                    if "message" in data:
+                        st.info(data["message"])
+                else:
+                    st.success(f"✅ Found {len(answers)} model answer(s)")
+                    
+                    # Group answers by question_id to prefer persona-specific over generic
+                    answers_by_question = {}
+                    for answer in answers:
+                        q_id = answer['question_id']
+                        # Prefer persona-tailored answers over generic
+                        if q_id not in answers_by_question or answer.get('persona_tailored'):
+                            answers_by_question[q_id] = answer
+                    
+                    # Display answers sorted by category
+                    sorted_answers = sorted(answers_by_question.values(), key=lambda x: (x['category'], x['question_id']))
+                    
+                    for answer in sorted_answers:
+                        with st.expander(f"**{answer['category']}** - {answer['question']}"):
+                            if answer.get('persona_tailored'):
+                                st.success(f"✨ Answer tailored for {answer.get('persona_name', 'selected persona')}")
+                            else:
+                                st.info("📝 Generic answer")
+                            
+                            st.write("**Model Answer:**")
+                            st.markdown(f"<div style='padding: 15px; background-color: #f0f2f6; border-radius: 5px;'>{answer['model_answer']}</div>", unsafe_allow_html=True)
+                            
+                            st.write("")
+                            st.write("**Key Points to Cover:**")
+                            for point in answer['key_points']:
+                                st.write(f"✓ {point}")
+                            
+                            if answer.get('reasoning'):
+                                st.write("")
+                                with st.expander("💡 Reasoning & Strategy"):
+                                    st.write(answer['reasoning'])
             
-            if model_ans.get('persona_tailored'):
-                st.success("✨ Answer tailored for selected persona")
-            
-            st.write("**Model Answer:**")
-            st.info(model_ans['model_answer'])
-            
-            st.write("**Key Themes to Cover:**")
-            for point in model_ans['key_points']:
-                st.write(f"- {point}")
+            except requests.exceptions.RequestException as e:
+                st.error(f"Connection error: {str(e)}")
+            except Exception as e:
+                st.error(f"Unexpected error: {str(e)}")
+                import traceback
+                with st.expander("Show error details"):
+                    st.code(traceback.format_exc())
 
 # TAB 4: SESSIONS
 with tab4:

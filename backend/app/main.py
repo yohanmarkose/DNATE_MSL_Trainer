@@ -9,6 +9,11 @@ from dotenv import load_dotenv
 import os
 from openai import OpenAI
 
+from features.model_answer import (
+    load_model_answers,
+    get_answer_key
+)
+
 from features.gamification import (
     calculate_level,
     xp_progress_to_next_level,
@@ -273,69 +278,32 @@ Respond in this JSON format:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
 
-@app.get("/model-answer/{question_id}")
-def get_model_answer(question_id: int, persona_id: Optional[str] = None):
-    question = next((q for q in questions_data["questions"] if q["id"] == question_id), None)
-    if not question:
-        raise HTTPException(status_code=404, detail="Question not found")
+@app.get("/model-answers")
+def get_model_answers(
+    persona_id: Optional[str] = None,
+    category: Optional[str] = None
+):
+    """
+    Get all model answers with optional filtering.
+    Returns list of answers that can be filtered by persona and/or category.
+    """
+    model_answers_data = load_model_answers()
+
+    all_answers = list(model_answers_data.get("answers", {}).values())
     
-    # Get persona if provided
-    persona = None
+    # Filter by persona_id if provided
     if persona_id:
-        persona = next((p for p in personas_data["personas"] if p["id"] == persona_id), None)
+        # Get both persona-specific and generic answers for this persona
+        all_answers = [a for a in all_answers if a.get("persona_id") == persona_id or a.get("persona_id") is None]
     
-    model_prompt = f"""Create a model answer for an MSL responding to this physician question.
-
-Question: {question['question']}
-Category: {question['category']}
-Context: {question['context']}
-Key Themes to Cover: {', '.join(question.get('key_themes', []))}
-"""
-
-    if persona:
-        model_prompt += f"""
-Physician Persona:
-- {persona['name']}, {persona['specialty']}
-- Priorities: {', '.join(persona['priorities'][:3])}
-- Communication Style: {persona['communication_style']['tone']}
-- Engagement Tips: {', '.join(persona['engagement_tips'][:3])}
-"""
-
-    model_prompt += """
-Create a strong MSL response (200-250 words) that:
-1. Directly addresses the question
-2. Covers the key themes
-3. Uses appropriate communication style for this persona (if provided)
-4. Is evidence-based and professional
-
-Also provide:
-- 4-5 key points that should be covered
-- Brief reasoning for the approach"""
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are an expert MSL trainer creating model answers."},
-                {"role": "user", "content": model_prompt}
-            ],
-            temperature=0.5,
-            max_tokens=500
-        )
-        
-        content = response.choices[0].message.content
-        
-        return {
-            "question_id": question_id,
-            "question": question["question"],
-            "category": question["category"],
-            "model_answer": content,
-            "key_points": question.get('key_themes', []),
-            "persona_tailored": persona_id is not None
-        }
+    # Filter by category if provided
+    if category:
+        all_answers = [a for a in all_answers if a.get("category") == category]
     
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Model answer generation failed: {str(e)}")
+    return {
+        "total": len(all_answers),
+        "answers": all_answers
+    }
 
 @app.get("/progress")
 def get_progress():
