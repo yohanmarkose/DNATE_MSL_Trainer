@@ -8,3 +8,6 @@ uvicorn
 requests
 plotly
 python-dateutil
+motor
+bcrypt
+pyjwt
