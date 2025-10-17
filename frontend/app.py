@@ -3,7 +3,6 @@ import requests
 import random
 from datetime import datetime
 from typing import List, Dict, Any, Optional
-# from utils.home import show_home
 
 
 # Add this at the top of your main file, after imports

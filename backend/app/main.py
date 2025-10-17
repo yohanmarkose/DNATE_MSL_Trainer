@@ -58,11 +58,11 @@ load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # Load JSON files
-with open('questions.json', 'r') as f:
-    questions_data = json.load(f)
+# with open('questions.json', 'r') as f:
+#     questions_data = json.load(f)
 
-with open('personas.json', 'r') as f:
-    personas_data = json.load(f)
+# with open('personas.json', 'r') as f:
+#     personas_data = json.load(f)
 
 # In-memory storage (replace with database in production)
 sessions_store = {}

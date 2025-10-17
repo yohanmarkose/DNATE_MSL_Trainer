@@ -25,11 +25,11 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 MODEL_ANSWERS_FILE = "model_answers.json"
 
 # Load JSON files
-with open('questions.json', 'r') as f:
-    questions_data = json.load(f)
+# with open('questions.json', 'r') as f:
+#     questions_data = json.load(f)
 
-with open('personas.json', 'r') as f:
-    personas_data = json.load(f)
+# with open('personas.json', 'r') as f:
+#     personas_data = json.load(f)
 
 # S3 configuration
 DOCUMENTS_KEY = "model_answers.json"
