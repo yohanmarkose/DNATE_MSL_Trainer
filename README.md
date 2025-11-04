@@ -53,6 +53,13 @@ The DNATE MSL Practice Gym helps medical professionals practice communicating wi
 - **AWS S3** - Cached content storage
 - **MongoDB Atlas** - Cloud database (recommended)
 
+### Application Images
+
+![Alt text](images/Picture1.png)
+![Alt text](images/Picture4.png)
+![Alt text](images/Picture2.png)
+![Alt text](images/Picture3.png)
+
 ## 📋 Prerequisites
 
 - Python 3.12
